@@ -4,10 +4,13 @@
 #define MAX_CPU_USAGE 90.0  // Umbral para alertas de CPU
 #define MAX_MEM_USAGE 80.0  // Umbral para alertas de memoria
 
+#include <pthread.h>
+
 typedef struct {
     pid_t pid;
     char name[100];
     float cpu_usage;
+    float cpu_time;
     float mem_usage;
 } ProcessInfo;
 
