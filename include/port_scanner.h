@@ -1,16 +1,9 @@
-#ifndef PORT_SCANNER_H  
-#define PORT_SCANNER_H  
-#define PORT_RANGE_START 1
-#define PORT_RANGE_END   1024
-#include <stdbool.h>
+#ifndef SCANNER_H
+#define SCANNER_H
 
-typedef struct {
-    int port;
-    char service[50];
-    bool is_open;
-} PortInfo;
+int scan_mounts(const char *mount_dir, char **devices);
+int scan_device(const char *device_path);
+void mark_as_tracked(const char *path);
+int is_tracked(const char *path);
 
-void scan_ports();
-const char* get_service_name(int port);
-
-#endif  
+#endif
