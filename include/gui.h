@@ -4,6 +4,6 @@
 #include <gtk/gtk.h>
 
 void init_gui(int argc, char **argv);
-void update_gui_log(const char *message);  // Para mostrar alertas en la interfaz
+void update_gui_log(const char *message);
 
-#endif  
+#endif
