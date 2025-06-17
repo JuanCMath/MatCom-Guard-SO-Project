@@ -1,8 +1,8 @@
 #ifndef PORT_SCANNER_H  
 #define PORT_SCANNER_H  
-
 #define PORT_RANGE_START 1
 #define PORT_RANGE_END   1024
+#include <stdbool.h>
 
 typedef struct {
     int port;
