@@ -46,7 +46,8 @@ void monitor_processes() {
     closedir(dir);
 }
 
-// Función para cargar configuración
+
+// Función para cargar la configuración
 void load_config() {
 
     // Valores predeterminados
@@ -100,6 +101,33 @@ void load_config() {
             }
         }
     }
-    
+
     fclose(conf);
+}
+
+
+// Cálculo de uso de CPU
+float cpu_usage(pid_t pid, unsigned long *prev_utime, unsigned long *prev_stime) {
+    char stat_path[256];
+    sprintf(stat_path, "/proc/%d/stat", pid);
+    FILE *fp = fopen(stat_path, "r");
+    if (!fp) return 0.0;
+
+    unsigned long utime, stime;
+    fscanf(fp, "%*d %*s %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", 
+           &utime, &stime);
+    fclose(fp);
+
+    // Calcular diferencia
+    unsigned long delta_utime = utime - *prev_utime;
+    unsigned long delta_stime = stime - *prev_stime;
+    *prev_utime = utime;
+    *prev_stime = stime;
+
+    // Obtener tiempo total del sistema
+    struct sysinfo si;
+    sysinfo(&si);
+    unsigned long total_time = si.uptime * sysconf(_SC_CLK_TCK);
+
+    return (delta_utime + delta_stime) * 100.0 / total_time;
 }
