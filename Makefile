@@ -1,11 +1,13 @@
 CC = gcc
-CFLAGS = -Wall -Wextra `pkg-config --cflags gtk+-3.0`
-LIBS = `pkg-config --libs gtk+-3.0` -ludev
+CFLAGS = -Wall -Wextra $(shell pkg-config --cflags gtk+-3.0)
+LIBS = $(shell pkg-config --libs gtk+-3.0) -ludev
+
+SRC = src/main.c src/device_monitor.c src/process_monitor.c src/port_scanner.c src/gui.c
 
 all: matcom-guard
 
-matcom-guard: src/main.c src/device_monitor.c src/process_monitor.c src/port_scanner.c src/gui.c
-    $(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+matcom-guard: $(SRC)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 clean:
-    rm -f matcom-guard
+	rm -f matcom-guard
