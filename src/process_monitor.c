@@ -17,34 +17,12 @@ int num_procesos = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 FILE *log_file = NULL;
 
+// Variables globales para procesos activos
+ActiveProcess *procesos_activos = NULL;
+int num_procesos_activos = 0;
 
 #define MAX_CPU_USAGE config.max_cpu_usage  // Umbral para alertas de CPU
 #define MAX_MEM_USAGE config.max_ram_usage // Umbral para alertas de memoria
-
-
-// Función para monitorear procesos
-void monitor_processes() {
-    DIR *dir = opendir("/proc");
-    if (!dir) {
-        perror("Error al abrir /proc");
-        return;
-    }
-
-    struct dirent *entry;
-    printf("Procesos con alto uso de CPU/MEM:\n");
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_type == DT_DIR && atoi(entry->d_name) != 0) {
-            pid_t pid = atoi(entry->d_name);
-            ProcessInfo info = get_process_info(pid);
-
-            if (strlen(info.name) > 0 && (info.cpu_usage > MAX_CPU_USAGE || info.mem_usage > MAX_MEM_USAGE)) {
-                printf("[ALERTA] PID: %d, Nombre: %s, CPU: %.2f%%, Mem: %.2f%%\n",
-                       pid, info.name, info.cpu_usage, info.mem_usage);
-            }
-        }
-    }
-    closedir(dir);
-}
 
 
 // Función para cargar la configuración
@@ -106,28 +84,113 @@ void load_config() {
 }
 
 
-// Cálculo de uso de CPU
-float cpu_usage(pid_t pid, unsigned long *prev_utime, unsigned long *prev_stime) {
-    char stat_path[256];
-    sprintf(stat_path, "/proc/%d/stat", pid);
-    FILE *fp = fopen(stat_path, "r");
-    if (!fp) return 0.0;
+// Función para monitorear procesos
+void monitor_processes() {
+    DIR *dir = opendir("/proc");
+    if (!dir) {
+        perror("Error al abrir /proc");
+        return;
+    }
 
-    unsigned long utime, stime;
-    fscanf(fp, "%*d %*s %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", 
-           &utime, &stime);
-    fclose(fp);
+    // 1. Marcar todos los procesos actuales como "no encontrados"
+    for (int i = 0; i < num_procesos_activos; i++) {
+        procesos_activos[i].encontrado = 0;
+    }
 
-    // Calcular diferencia
-    unsigned long delta_utime = utime - *prev_utime;
-    unsigned long delta_stime = stime - *prev_stime;
-    *prev_utime = utime;
-    *prev_stime = stime;
+    // 2. Recorrer /proc y procesar cada PID
+    struct dirent *entry;
+    printf("=== CICLO DE MONITOREO ===\n");
+    
+    while ((entry = readdir(dir)) != NULL) {
+        // Verificar si el nombre del directorio es un número (PID)
+        char *endptr;
+        long lpid = strtol(entry->d_name, &endptr, 10);
+        if (*endptr == '\0') {
+            pid_t pid = (pid_t)lpid;
+            
+            // Obtener información del proceso
+            ProcessInfo *info_ptr = get_process_info(pid);
+            if (!info_ptr || strlen(info_ptr->name) == 0) {
+                if (info_ptr) free(info_ptr);
+                continue;
+            }
+            
+            int idx = find_process(pid);
+            if (idx == -1) {
+                // Proceso nuevo - agregarlo
+                add_process(*info_ptr);
+            } else {
+                // Proceso existente - actualizar información
+                update_process(*info_ptr, idx);
+            }
+            
+            // Verificar si el proceso excede umbrales y generar alertas
+            if (info_ptr->cpu_usage > MAX_CPU_USAGE || info_ptr->mem_usage > MAX_MEM_USAGE) {
+                printf("[ALERTA] PID: %d, Nombre: %s, CPU: %.2f%%, Mem: %.2f%%\n",
+                       pid, info_ptr->name, info_ptr->cpu_usage, info_ptr->mem_usage);
+            }
+            
+            free(info_ptr);
+        }
+    }
+    closedir(dir);
 
-    // Obtener tiempo total del sistema
-    struct sysinfo si;
-    sysinfo(&si);
-    unsigned long total_time = si.uptime * sysconf(_SC_CLK_TCK);
+    // 3. Eliminar procesos que no fueron encontrados (terminados)
+    for (int i = num_procesos_activos - 1; i >= 0; i--) {
+        if (!procesos_activos[i].encontrado) {
+            remove_process(procesos_activos[i].info.pid);
+        }
+    }
+    
+    // 4. Mostrar estadísticas opcionales
+    show_process_stats();
+}
 
-    return (delta_utime + delta_stime) * 100.0 / total_time;
+
+// Cálculo de uso total de CPU
+float total_cpu_usage(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time) {
+
+    ProcStat stat;
+    if (read_proc_stat(pid, &stat) != 0) return 0.0;
+
+    // Inicializar los tiempos previos si es la primera vez
+    if (*prev_sys_time == 0 && *prev_user_time == 0) {
+        *prev_sys_time = stat.stime;
+        *prev_user_time = stat.utime;
+        return 0.0;
+    } else {
+        *prev_sys_time = stat.stime;
+        *prev_user_time = stat.utime;
+    }
+    
+    FILE *uptime_fp = fopen("/proc/uptime", "r");
+    if (!uptime_fp) return 0.0;
+    double uptime = 0.0;
+    fscanf(uptime_fp, "%lf", &uptime);
+    fclose(uptime_fp);
+
+    long clk_tck = sysconf(_SC_CLK_TCK);
+    double seconds = uptime - (stat.starttime / (double)clk_tck);
+    if (seconds <= 0) return 0.0;
+    
+    return (float)(100.0 * ((stat.utime + stat.stime) / ((double)clk_tck * seconds)));
+}
+
+// Calculo de uso del CPU en el ultimo intervalo de tiempo
+float interval_cpu_usage(pid_t pid) {
+    ProcStat stat;
+    if (read_proc_stat(pid, &stat) != 0) return 0.0;
+
+    unsigned long prev_user_time = 0, prev_sys_time = 0;
+    read_prev_times(pid, &prev_user_time, &prev_sys_time);
+
+    unsigned long delta_user = stat.utime - prev_user_time;
+    unsigned long delta_sys = stat.stime - prev_sys_time;
+    unsigned long delta_total = delta_user + delta_sys;
+    long clk_tck = sysconf(_SC_CLK_TCK);
+
+    write_prev_times(pid, stat.utime, stat.stime);
+
+    double cpu_percent = 100.0 * (delta_total / ((double)clk_tck * config.check_interval));    
+    return (float)(100.0 * (delta_total / ((double)clk_tck * config.check_interval)));
 }
