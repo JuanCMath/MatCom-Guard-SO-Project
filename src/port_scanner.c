@@ -1,4 +1,5 @@
 #include "port_scanner.h"
+#include "gui.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,6 +7,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <glib.h>
 
 #define MAX_TRACKED 64
 #define MAX_HASHES 8192
@@ -105,23 +107,26 @@ int compare_hashes(const char *root_path) {
 }
 
 int scan_mounts(const char *mount_dir, char **devices) {
-    int count = 0;
-    DIR *dp = opendir(mount_dir);
-    if (!dp) return 0;
+    FILE *fp = fopen("/proc/mounts", "r");
+    if (!fp) return 0;
 
-    struct dirent *entry;
-    while ((entry = readdir(dp))) {
-        if (entry->d_type == DT_DIR && strcmp(entry->d_name, ".") != 0 &&
-            strcmp(entry->d_name, "..") != 0) {
-            char full_path[1024];
-            snprintf(full_path, sizeof(full_path), "%s%s", mount_dir, entry->d_name);
-            devices[count++] = strdup(full_path);
+    char line[1024];
+    int count = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        // /dev/sdb1 /media/usb_simulado ext4 rw,...
+        char device[256], mount_point[256];
+        if (sscanf(line, "%255s %255s", device, mount_point) == 2) {
+            if (strncmp(mount_point, mount_dir, strlen(mount_dir)) == 0) {
+                devices[count++] = strdup(mount_point);
+            }
         }
     }
 
-    closedir(dp);
+    fclose(fp);
     return count;
 }
+
 
 int scan_device(const char *device_path) {
     baseline_count = 0;
