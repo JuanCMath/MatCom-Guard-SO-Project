@@ -13,6 +13,9 @@ typedef struct {
     float mem_usage;
     time_t inicio_alerta;
     int alerta_activa;
+    int exceeds_thresholds;  // 1 si excede umbrales, 0 si no
+    time_t first_threshold_exceed; // Momento en que empezó a exceder umbrales
+    int is_whitelisted;      // 1 si está en whitelist, 0 si no
 } ProcessInfo;
 
 void monitor_processes();
@@ -65,6 +68,11 @@ unsigned long get_total_system_memory();
 float get_process_memory_usage(pid_t pid);
 void get_process_name(pid_t pid, char *name, size_t size);
 int process_exists(pid_t pid);
+
+// Funciones para manejo de whitelist y alertas con duración
+int is_process_whitelisted(const char *process_name);
+void check_and_update_alert_status(ProcessInfo *info);
+void clear_alert_if_needed(ProcessInfo *info);
 
 // Variables globales externas
 extern ActiveProcess *procesos_activos;

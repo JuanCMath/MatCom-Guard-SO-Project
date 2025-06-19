@@ -120,6 +120,9 @@ ProcessInfo* get_process_info(pid_t pid) {
         return NULL;
     }
     
+    // Verificar si está en whitelist
+    info->is_whitelisted = is_process_whitelisted(info->name);
+    
     // Obtener uso de CPU usando función existente
     info->cpu_usage = interval_cpu_usage(pid);
     
@@ -129,6 +132,8 @@ ProcessInfo* get_process_info(pid_t pid) {
     // Inicializar campos de alerta
     info->alerta_activa = 0;
     info->inicio_alerta = 0;
+    info->exceeds_thresholds = 0;
+    info->first_threshold_exceed = 0;
     info->cpu_time = 0.0; // Por ahora, se puede implementar después
     
     return info;
@@ -173,10 +178,27 @@ void monitor_processes() {
                 // Callback para proceso nuevo
                 if (event_callbacks && event_callbacks->on_new_process) {
                     event_callbacks->on_new_process(info_ptr);
-                }
-            } else {
-                // Proceso existente - actualizar información
+                }            } else {
+                // Proceso existente - actualizar información y verificar alertas
+                ProcessInfo *existing = &procesos_activos[idx].info;
+                
+                // Preservar información de alertas previas
+                int prev_exceeds = existing->exceeds_thresholds;
+                time_t prev_first_exceed = existing->first_threshold_exceed;
+                int prev_alerta_activa = existing->alerta_activa;
+                time_t prev_inicio_alerta = existing->inicio_alerta;
+                
+                // Actualizar información del proceso
                 update_process(*info_ptr, idx);
+
+                // Restaurar información de alertas
+                existing->exceeds_thresholds = prev_exceeds;
+                existing->first_threshold_exceed = prev_first_exceed;
+                existing->alerta_activa = prev_alerta_activa;
+                existing->inicio_alerta = prev_inicio_alerta;
+                
+                // Verificar y actualizar estado de alerta
+                check_and_update_alert_status(existing);
             }
             
             // Verificar si el proceso excede umbrales y generar alertas con callbacks
@@ -376,4 +398,94 @@ void cleanup_monitoring() {
     
     pthread_mutex_destroy(&mutex);
     printf("[INFO] Recursos de monitoreo liberados\n");
+}
+
+// ===== FUNCIONES PARA MANEJO DE WHITELIST Y ALERTAS CON DURACIÓN =====
+
+// Verificar si un proceso está en la whitelist
+int is_process_whitelisted(const char *process_name) {
+    if (!process_name || !config.white_list) return 0;
+    
+    for (int i = 0; i < config.num_white_processes; i++) {
+        if (config.white_list[i] && strcmp(process_name, config.white_list[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Verificar y actualizar estado de alerta según RF2
+void check_and_update_alert_status(ProcessInfo *info) {
+    if (!info) return;
+    
+    // Si está en whitelist, no generar alertas
+    if (info->is_whitelisted) {
+        clear_alert_if_needed(info);
+        return;
+    }
+    
+    time_t current_time = time(NULL);
+    
+    // Verificar si excede umbrales según la fórmula del RF2:
+    // alerta = (uso_CPU > UMBRAL_CPU) ∨ (uso_RAM > UMBRAL_RAM)
+    int exceeds_now = (info->cpu_usage > config.max_cpu_usage) || 
+                      (info->mem_usage > config.max_ram_usage);
+    
+    if (exceeds_now) {
+        if (!info->exceeds_thresholds) {
+            // Primera vez que excede umbrales
+            info->exceeds_thresholds = 1;
+            info->first_threshold_exceed = current_time;
+            printf("[INFO] Proceso %s (PID: %d) comenzó a exceder umbrales. CPU: %.2f%%, MEM: %.2f%%\n",
+                   info->name, info->pid, info->cpu_usage, info->mem_usage);
+        } else {
+            // Ya estaba excediendo, verificar duración
+            int duration = (int)(current_time - info->first_threshold_exceed);
+            
+            if (duration >= config.alert_duration && !info->alerta_activa) {
+                // Activar alerta después de la duración configurada
+                info->alerta_activa = 1;
+                info->inicio_alerta = current_time;
+                
+                printf("[ALERTA ACTIVADA] PID: %d, Nombre: %s, Duración: %d seg, CPU: %.2f%%, MEM: %.2f%%\n",
+                       info->pid, info->name, duration, info->cpu_usage, info->mem_usage);
+                
+                // Callbacks específicos según el tipo de exceso
+                if (info->cpu_usage > config.max_cpu_usage && event_callbacks && event_callbacks->on_high_cpu_alert) {
+                    event_callbacks->on_high_cpu_alert(info);
+                }
+                if (info->mem_usage > config.max_ram_usage && event_callbacks && event_callbacks->on_high_memory_alert) {
+                    event_callbacks->on_high_memory_alert(info);
+                }
+            }
+        }
+    } else {
+        // Ya no excede umbrales
+        clear_alert_if_needed(info);
+    }
+}
+
+// Limpiar alerta si el proceso volvió a valores normales
+void clear_alert_if_needed(ProcessInfo *info) {
+    if (!info) return;
+    
+    if (info->exceeds_thresholds || info->alerta_activa) {
+        int was_active = info->alerta_activa;
+        
+        // Resetear todos los campos de alerta
+        info->exceeds_thresholds = 0;
+        info->first_threshold_exceed = 0;
+        info->alerta_activa = 0;
+        info->inicio_alerta = 0;
+        
+        if (was_active) {
+            printf("[ALERTA DESPEJADA] PID: %d, Nombre: %s volvió a valores normales. CPU: %.2f%%, MEM: %.2f%%\n",
+                   info->pid, info->name, info->cpu_usage, info->mem_usage);
+            
+            // Callback para alerta despejada
+            if (event_callbacks && event_callbacks->on_alert_cleared) {
+                event_callbacks->on_alert_cleared(info);
+            }
+        }
+    }
 }

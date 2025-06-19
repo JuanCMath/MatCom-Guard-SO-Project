@@ -6,15 +6,16 @@ SRC = src/main.c src/device_monitor.c src/process_monitor.c src/auxiliar_methods
 
 all: matcom-guard
 
+# Compilar el programa principal
 matcom-guard: $(SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-# Ejemplo de monitoreo
-example: src/process_monitor_gui.c src/process_monitor.c src/auxiliar_methods.c
-	$(CC) $(CFLAGS) -o process_monitor_gui $^ -pthread
+# Compilar ejemplo de GUI para monitoreo de procesos (sin GTK si no está disponible)
+process_monitor_gui: src/process_monitor_gui.c src/process_monitor.c src/auxiliar_methods.c
+	$(CC) -Wall -Wextra -Iinclude -o $@ $^ -lpthread
 
 test-monitoring: example
 	./process_monitor_gui
 
 clean:
-	rm -f matcom-guard
+	rm -f matcom-guard process_monitor_gui
