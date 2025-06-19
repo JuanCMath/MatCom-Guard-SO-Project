@@ -218,7 +218,8 @@ void monitor_processes() {
         }
     }
     
-    // 4. Mostrar estadísticas opcionales    show_process_stats();
+    // 4. Mostrar estadísticas opcionales
+    show_process_stats();
 }
 
 // ===== FUNCIONES DE MANEJO DE HILOS PARA MONITOREO =====
