@@ -9,5 +9,12 @@ all: matcom-guard
 matcom-guard: $(SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
+# Ejemplo de monitoreo
+example: src/process_monitor_gui.c src/process_monitor.c src/auxiliar_methods.c
+	$(CC) $(CFLAGS) -o process_monitor_gui $^ -pthread
+
+test-monitoring: example
+	./process_monitor_gui
+
 clean:
 	rm -f matcom-guard
