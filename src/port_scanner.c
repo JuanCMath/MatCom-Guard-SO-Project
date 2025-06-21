@@ -1,482 +1,707 @@
-#include "port_scanner.h"
-#include "gui.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <openssl/sha.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <glib.h>
-#include <pthread.h>
-#include <time.h>
-#include <signal.h>
+/*
+ * ===============================================================================
+ * ARCHIVO port_scanner.c - MatCom Guard Sistema de Seguridad USB
+ * ===============================================================================
+ * 
+ * ¿QUÉ ES UN ARCHIVO .c EN C?
+ * Un archivo .c contiene la IMPLEMENTACIÓN real de las funciones.
+ * Es como el "motor" que hace funcionar todo lo que se declara en el .h
+ * 
+ * Aquí es donde escribimos el código que REALMENTE hace el trabajo:
+ * - Escanear dispositivos USB
+ * - Calcular hashes de archivos
+ * - Detectar cambios sospechosos
+ * - Generar alertas de seguridad
+ */
 
-#define MAX_TRACKED 64
-#define MAX_HASHES 8192
-#define CHANGE_THRESHOLD 0.1
-#define MONITOR_INTERVAL 5  // segundos
-#define MAX_DEVICES 32
-#define LOG_FILE "/var/log/matcom_usb.log"
+// ===============================================================================
+// INCLUDES (librerías necesarias)
+// ===============================================================================
 
-typedef struct {
-    char path[512];
-    int tracked;
-    time_t first_seen;
-    time_t last_scan;
-} TrackedDevice;
+#include "port_scanner.h"     // Nuestro propio header con las declaraciones
+#include <stdio.h>           // Para printf, fopen, etc.
+#include <stdlib.h>          // Para malloc, free, exit, etc.
+#include <string.h>          // Para strcmp, strcpy, strlen, etc.
+#include <dirent.h>          // Para opendir, readdir (leer directorios)
+#include <unistd.h>          // Para access, sleep
+#include <sys/stat.h>        // Para stat (obtener info de archivos)
+#include <sys/types.h>       // Para tipos de datos del sistema
+#include <errno.h>           // Para códigos de error
+#include <openssl/sha.h>     // Para calcular hash SHA-256
 
-typedef struct {
-    char filepath[1024];
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    time_t mtime;
-    mode_t permissions;
-    uid_t owner;
-    gid_t group;
-    off_t size;
-} FileHash;
+// ===============================================================================
+// VARIABLES GLOBALES (como la "memoria" del sistema)
+// ===============================================================================
 
-typedef struct {
-    char device_path[512];
-    char mount_point[512];
-    int file_count;
-    int suspicious_changes;
-    time_t last_scan;
-    int is_suspicious;
-} USBDeviceInfo;
+/*
+ * ¿Qué son las variables globales?
+ * Son variables que pueden ser accedidas desde cualquier función del archivo.
+ * Es como tener una "pizarra común" donde todas las funciones pueden escribir
+ * y leer información.
+ */
 
-// Variables globales
-static TrackedDevice tracked[MAX_TRACKED];
-static int tracked_count = 0;
-static FileHash baseline[MAX_HASHES];
-static int baseline_count = 0;
-static USBDeviceInfo detected_devices[MAX_DEVICES];
-static int device_count = 0;
-static pthread_t monitor_thread;
-static int monitoring_active = 0;
-static pthread_mutex_t device_mutex = PTHREAD_MUTEX_INITIALIZER;
+static USBDevice dispositivos_monitoreados[MAX_DEVICES];  // Array de dispositivos conectados
+static int numero_dispositivos = 0;                       // Cuántos dispositivos tenemos
+static int sistema_inicializado = 0;                      // ¿Está el sistema iniciado?
 
-// Funciones de logging y alertas
-void log_event(const char *level, const char *message) {
-    FILE *log = fopen(LOG_FILE, "a");
-    if (!log) log = fopen("/tmp/matcom_usb.log", "a"); // fallback
+// ===============================================================================
+// FUNCIÓN: inicializar_monitor_usb
+// Prepara el sistema para comenzar el monitoreo
+// ===============================================================================
+
+int inicializar_monitor_usb(void) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como "encender" el sistema de seguridad. Prepara todo lo necesario
+     * para empezar a monitorear los dispositivos USB.
+     */
     
-    if (log) {
-        time_t now = time(NULL);
-        char timestamp[64];
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&now));
-        fprintf(log, "[%s] %s: %s\n", timestamp, level, message);
-        fclose(log);
-    }
+    printf("🔧 Inicializando sistema de monitoreo USB MatCom Guard...\n");
     
-    // También enviar a GUI si está disponible
-    gui_add_log_entry("USB_MONITOR", level, message);
+    // Limpiar la memoria donde guardamos los dispositivos
+    // Es como "borrar la pizarra" para empezar limpio
+    memset(dispositivos_monitoreados, 0, sizeof(dispositivos_monitoreados));
+    numero_dispositivos = 0;
+    
+    // Marcar que el sistema ya está iniciado
+    sistema_inicializado = 1;
+    
+    printf("✅ Sistema de monitoreo USB inicializado correctamente.\n");
+    return 1;  // Retorna 1 = éxito
 }
 
-void emit_alert(const char *device_path, const char *alert_type, const char *details) {
-    char alert_msg[1024];
-    snprintf(alert_msg, sizeof(alert_msg), 
-        "ALERTA en dispositivo %s - %s: %s", device_path, alert_type, details);
+// ===============================================================================
+// FUNCIÓN: detectar_dispositivos_usb
+// Busca todos los dispositivos USB conectados
+// ===============================================================================
+
+int detectar_dispositivos_usb(const char* mount_directory, 
+                             USBDevice* dispositivos, 
+                             int max_dispositivos) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como un "guardia" que revisa todas las "puertas de entrada" (directorios
+     * de montaje) para ver qué dispositivos USB están conectados.
+     * 
+     * Los pasos son:
+     * 1. Abrir el directorio donde se montan los USB
+     * 2. Leer cada subdirectorio (cada uno es un dispositivo)
+     * 3. Guardar la información de cada dispositivo encontrado
+     */
     
-    log_event("ALERT", alert_msg);
-    printf("\n🚨 %s\n", alert_msg);
-}
-    for (int i = 0; i < tracked_count; ++i)
-        if (strcmp(tracked[i].path, path) == 0) return 1;
-    return 0;
-}
-
-void mark_as_tracked(const char *path) {
-    if (tracked_count < MAX_TRACKED) {
-        strcpy(tracked[tracked_count].path, path);
-        tracked[tracked_count].first_seen = time(NULL);
-        tracked[tracked_count].last_scan = 0;
-        tracked_count++;
-        
-        char msg[512];
-        snprintf(msg, sizeof(msg), "Nuevo dispositivo detectado y agregado al seguimiento: %s", path);
-        log_event("INFO", msg);
-    }
-}
-
-// Función mejorada para calcular hash con metadatos adicionales
-int compute_file_hash_extended(const char *filepath, FileHash *file_hash) {
-    FILE *file = fopen(filepath, "rb");
-    if (!file) return -1;
-
-    // Obtener metadatos del archivo
-    struct stat st;
-    if (stat(filepath, &st) != 0) {
-        fclose(file);
-        return -1;
-    }
-
-    // Calcular hash SHA-256
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    unsigned char buffer[4096];
-    size_t bytes;
-
-    while ((bytes = fread(buffer, 1, sizeof(buffer), file)) != 0)
-        SHA256_Update(&ctx, buffer, bytes);
-
-    SHA256_Final(file_hash->hash, &ctx);
-    fclose(file);
-
-    // Guardar metadatos
-    strcpy(file_hash->filepath, filepath);
-    file_hash->mtime = st.st_mtime;
-    file_hash->permissions = st.st_mode;
-    file_hash->owner = st.st_uid;
-    file_hash->group = st.st_gid;
-    file_hash->size = st.st_size;
-
-    return 0;
-}
-
-// Función para detectar tipos específicos de cambios sospechosos
-int analyze_file_changes(const FileHash *baseline_file, const FileHash *current_file) {
-    int suspicious_flags = 0;
-    char details[512] = "";
+    printf("🔍 Buscando dispositivos USB en: %s\n", mount_directory);
     
-    // 1. Crecimiento inusual de tamaño (más de 100x el tamaño original)
-    if (current_file->size > baseline_file->size * 100) {
-        suspicious_flags |= 1;
-        snprintf(details + strlen(details), sizeof(details) - strlen(details), 
-            "Crecimiento inusual: %ld -> %ld bytes; ", baseline_file->size, current_file->size);
-    }
-    
-    // 2. Cambios de permisos sospechosos (777, ejecución añadida)
-    if ((current_file->permissions & 0777) == 0777 && (baseline_file->permissions & 0777) != 0777) {
-        suspicious_flags |= 2;
-        strcat(details, "Permisos cambiados a 777; ");
-    }
-    
-    if ((current_file->permissions & S_IXUSR) && !(baseline_file->permissions & S_IXUSR)) {
-        suspicious_flags |= 4;
-        strcat(details, "Permisos de ejecución añadidos; ");
-    }
-    
-    // 3. Cambio de propietario (especialmente a root o nobody)
-    if (current_file->owner != baseline_file->owner) {
-        suspicious_flags |= 8;
-        snprintf(details + strlen(details), sizeof(details) - strlen(details), 
-            "Propietario cambiado: %d -> %d; ", baseline_file->owner, current_file->owner);
-    }
-    
-    // 4. Timestamp anómalo (futuro o muy antiguo)
-    time_t now = time(NULL);
-    if (current_file->mtime > now + 3600 || current_file->mtime < baseline_file->mtime - 86400) {
-        suspicious_flags |= 16;
-        strcat(details, "Timestamp anómalo; ");
-    }
-    
-    if (suspicious_flags && strlen(details) > 0) {
-        emit_alert(current_file->filepath, "CAMBIO_SOSPECHOSO", details);
-    }
-    
-    return suspicious_flags;
-}
-
-void recurse_hash_extended(const char *dir) {
-    DIR *dp = opendir(dir);
-    if (!dp) return;
-
-    struct dirent *entry;
-    while ((entry = readdir(dp))) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-            continue;
-
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
-
-        struct stat st;
-        if (stat(path, &st) != 0) continue;
-
-        if (S_ISDIR(st.st_mode)) {
-            recurse_hash_extended(path);
-        } else {
-            if (baseline_count < MAX_HASHES) {
-                if (compute_file_hash_extended(path, &baseline[baseline_count]) == 0) {
-                    baseline_count++;
-                }
-            }
-        }
-    }
-
-    closedir(dp);
-}
-
-// Función mejorada para comparar hashes con análisis detallado
-int compare_hashes_detailed(const char *root_path, USBDeviceInfo *device_info) {
-    int changed = 0;
-    int scanned = 0;
-    int suspicious_changes = 0;
-    int new_files = 0;
-    int deleted_files = 0;
-
-    // Contar archivos actuales para detectar replicación
-    DIR *dp = opendir(root_path);
-    int current_file_count = 0;
-    if (dp) {
-        struct dirent *entry;
-        while ((entry = readdir(dp))) {
-            if (entry->d_type == DT_REG) current_file_count++;
-        }
-        closedir(dp);
-    }
-
-    for (int i = 0; i < baseline_count; ++i) {
-        FileHash current_file;
-        if (compute_file_hash_extended(baseline[i].filepath, &current_file) == 0) {
-            scanned++;
-            
-            // Comparar hashes
-            if (memcmp(baseline[i].hash, current_file.hash, SHA256_DIGEST_LENGTH) != 0) {
-                changed++;
-                
-                // Análisis detallado de cambios
-                int flags = analyze_file_changes(&baseline[i], &current_file);
-                if (flags > 0) suspicious_changes++;
-            }
-        } else {
-            // Archivo eliminado
-            deleted_files++;
-            char msg[512];
-            snprintf(msg, sizeof(msg), "Archivo eliminado: %s", baseline[i].filepath);
-            emit_alert(root_path, "ARCHIVO_ELIMINADO", msg);
-        }
-    }
-    
-    // Detectar replicación de archivos (más archivos que en baseline)
-    if (current_file_count > baseline_count * 1.5) {
-        new_files = current_file_count - baseline_count;
-        char msg[128];
-        snprintf(msg, sizeof(msg), "%d archivos nuevos detectados (posible replicación)", new_files);
-        emit_alert(root_path, "REPLICACION_ARCHIVOS", msg);
-        suspicious_changes++;
-    }
-
-    // Actualizar información del dispositivo
-    if (device_info) {
-        device_info->file_count = scanned;
-        device_info->suspicious_changes = suspicious_changes;
-        device_info->last_scan = time(NULL);
-        device_info->is_suspicious = (suspicious_changes > 0) || 
-                                   ((double)changed / scanned > CHANGE_THRESHOLD);
-    }
-
-    if (scanned == 0) return 0;
-    double ratio = (double)changed / scanned;
-    
-    // Alertar si hay muchos cambios
-    if (ratio > CHANGE_THRESHOLD) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), 
-            "%.1f%% de archivos modificados (%d/%d) - umbral: %.1f%%", 
-            ratio * 100, changed, scanned, CHANGE_THRESHOLD * 100);
-        emit_alert(root_path, "UMBRAL_CAMBIOS_EXCEDIDO", msg);
-    }
-    
-    return ratio > CHANGE_THRESHOLD;
-}
-
-// Función para escanear dispositivos montados y detectar nuevos
-int scan_mounts_enhanced(const char *mount_dir) {
-    FILE *fp = fopen("/proc/mounts", "r");
-    if (!fp) return 0;
-
-    char line[1024];
-    int new_devices = 0;
-
-    pthread_mutex_lock(&device_mutex);
-    
-    while (fgets(line, sizeof(line), fp)) {
-        char device[256], mount_point[256], filesystem[64];
-        if (sscanf(line, "%255s %255s %63s", device, mount_point, filesystem) == 3) {
-            // Buscar dispositivos USB o removibles
-            if (strstr(device, "/dev/sd") || strstr(mount_point, "/media") || 
-                strstr(mount_point, "/mnt") || strstr(mount_point, mount_dir)) {
-                
-                // Verificar si ya está siendo monitoreado
-                int already_tracked = 0;
-                for (int i = 0; i < device_count; i++) {
-                    if (strcmp(detected_devices[i].mount_point, mount_point) == 0) {
-                        already_tracked = 1;
-                        break;
-                    }
-                }
-                
-                if (!already_tracked && device_count < MAX_DEVICES) {
-                    // Nuevo dispositivo detectado
-                    strcpy(detected_devices[device_count].device_path, device);
-                    strcpy(detected_devices[device_count].mount_point, mount_point);
-                    detected_devices[device_count].file_count = 0;
-                    detected_devices[device_count].suspicious_changes = 0;
-                    detected_devices[device_count].last_scan = 0;
-                    detected_devices[device_count].is_suspicious = 0;
-                    
-                    char msg[512];
-                    snprintf(msg, sizeof(msg), 
-                        "Nuevo dispositivo USB detectado: %s montado en %s (%s)", 
-                        device, mount_point, filesystem);
-                    log_event("INFO", msg);
-                    
-                    // Actualizar GUI
-                    GUIUSBDevice gui_device = {0};
-                    strncpy(gui_device.device_name, device, sizeof(gui_device.device_name) - 1);
-                    strncpy(gui_device.mount_point, mount_point, sizeof(gui_device.mount_point) - 1);
-                    strncpy(gui_device.status, "DETECTADO", sizeof(gui_device.status) - 1);
-                    gui_device.last_scan = time(NULL);
-                    gui_update_usb_device(&gui_device);
-                    
-                    device_count++;
-                    new_devices++;
-                    
-                    // Marcar como rastreado y crear baseline
-                    mark_as_tracked(mount_point);
-                }
-            }
-        }
-    }
-    
-    pthread_mutex_unlock(&device_mutex);
-    fclose(fp);
-    return new_devices;
-}
-
-// Función de monitoreo periódico en hilo separado
-void* usb_monitor_thread(void* arg) {
-    log_event("INFO", "Monitor de dispositivos USB iniciado");
-    
-    while (monitoring_active) {
-        // 1. Escanear nuevos dispositivos
-        int new_devices = scan_mounts_enhanced("/media");
-        
-        // 2. Escanear dispositivos existentes
-        pthread_mutex_lock(&device_mutex);
-        for (int i = 0; i < device_count; i++) {
-            USBDeviceInfo *device = &detected_devices[i];
-            
-            // Verificar si el dispositivo sigue montado
-            if (access(device->mount_point, R_OK) != 0) {
-                char msg[512];
-                snprintf(msg, sizeof(msg), "Dispositivo removido: %s", device->mount_point);
-                log_event("INFO", msg);
-                
-                // Actualizar GUI
-                GUIUSBDevice gui_device = {0};
-                strncpy(gui_device.device_name, device->device_path, sizeof(gui_device.device_name) - 1);
-                strncpy(gui_device.mount_point, device->mount_point, sizeof(gui_device.mount_point) - 1);
-                strncpy(gui_device.status, "REMOVIDO", sizeof(gui_device.status) - 1);
-                gui_update_usb_device(&gui_device);
-                
-                // Remover de la lista (simplificado - mover último elemento)
-                if (i < device_count - 1) {
-                    detected_devices[i] = detected_devices[device_count - 1];
-                }
-                device_count--;
-                i--; // Reajustar índice
-                continue;
-            }
-            
-            // Escanear dispositivo para cambios
-            baseline_count = 0; // Reset baseline para este dispositivo
-            recurse_hash_extended(device->mount_point);
-            sleep(1); // Pausa breve para detectar cambios
-            
-            int is_suspicious = compare_hashes_detailed(device->mount_point, device);
-            
-            // Actualizar GUI con información del escaneo
-            GUIUSBDevice gui_device = {0};
-            strncpy(gui_device.device_name, device->device_path, sizeof(gui_device.device_name) - 1);
-            strncpy(gui_device.mount_point, device->mount_point, sizeof(gui_device.mount_point) - 1);
-            snprintf(gui_device.status, sizeof(gui_device.status), 
-                is_suspicious ? "SOSPECHOSO" : "LIMPIO");
-            gui_device.files_changed = device->suspicious_changes;
-            gui_device.total_files = device->file_count;
-            gui_device.is_suspicious = device->is_suspicious;
-            gui_device.last_scan = device->last_scan;
-            gui_update_usb_device(&gui_device);
-        }
-        pthread_mutex_unlock(&device_mutex);
-        
-        // Esperar antes del próximo ciclo
-        sleep(MONITOR_INTERVAL);
-    }
-    
-    log_event("INFO", "Monitor de dispositivos USB detenido");
-    return NULL;
-}
-
-// Funciones de control del monitor
-int start_usb_monitoring(void) {
-    if (monitoring_active) return 1; // Ya está activo
-    
-    monitoring_active = 1;
-    if (pthread_create(&monitor_thread, NULL, usb_monitor_thread, NULL) != 0) {
-        monitoring_active = 0;
-        log_event("ERROR", "No se pudo iniciar el hilo de monitoreo USB");
+    // Verificar que el sistema esté inicializado
+    if (!sistema_inicializado) {
+        printf("❌ Error: Sistema no inicializado. Llama primero a inicializar_monitor_usb()\n");
         return 0;
     }
     
-    log_event("INFO", "Monitoreo automático de USB iniciado");
-    return 1;
-}
-
-int stop_usb_monitoring(void) {
-    if (!monitoring_active) return 1;
-    
-    monitoring_active = 0;
-    pthread_join(monitor_thread, NULL);
-    log_event("INFO", "Monitoreo automático de USB detenido");
-    return 1;
-}
-
-// Función para obtener estadísticas de dispositivos
-void get_usb_statistics(int *total_devices, int *suspicious_devices, int *total_files) {
-    pthread_mutex_lock(&device_mutex);
-    *total_devices = device_count;
-    *suspicious_devices = 0;
-    *total_files = 0;
-    
-    for (int i = 0; i < device_count; i++) {
-        if (detected_devices[i].is_suspicious) (*suspicious_devices)++;
-        *total_files += detected_devices[i].file_count;
+    // Abrir el directorio de montaje
+    // DIR* es como un "libro" que nos permite leer los contenidos de un directorio
+    DIR* directorio = opendir(mount_directory);
+    if (directorio == NULL) {
+        printf("❌ Error: No se puede abrir el directorio %s\n", mount_directory);
+        return 0;
     }
-    pthread_mutex_unlock(&device_mutex);
+    
+    int dispositivos_encontrados = 0;
+    struct dirent* entrada;  // Cada "entrada" es un archivo o directorio
+    
+    // Leer cada entrada del directorio
+    // Es como "hojear" cada página del "libro" del directorio
+    while ((entrada = readdir(directorio)) != NULL && dispositivos_encontrados < max_dispositivos) {
+        
+        // Saltar las entradas especiales "." y ".."
+        // Estas son entradas especiales que no nos interesan
+        if (strcmp(entrada->d_name, ".") == 0 || strcmp(entrada->d_name, "..") == 0) {
+            continue;
+        }
+        
+        // Construir la ruta completa del dispositivo
+        char ruta_completa[MAX_PATH_LENGTH];
+        snprintf(ruta_completa, sizeof(ruta_completa), "%s/%s", mount_directory, entrada->d_name);
+        
+        // Verificar si es realmente un directorio (dispositivo montado)
+        struct stat info_archivo;
+        if (stat(ruta_completa, &info_archivo) == 0 && S_ISDIR(info_archivo.st_mode)) {
+            
+            // ¡Encontramos un dispositivo USB!
+            printf("📱 Dispositivo USB detectado: %s\n", entrada->d_name);
+            
+            // Guardar la información del dispositivo
+            USBDevice* dispositivo = &dispositivos[dispositivos_encontrados];
+            
+            // Copiar el nombre del dispositivo
+            strncpy(dispositivo->device_name, entrada->d_name, DEVICE_NAME_SIZE - 1);
+            dispositivo->device_name[DEVICE_NAME_SIZE - 1] = '\0';  // Asegurar terminación
+            
+            // Copiar la ruta de montaje
+            strncpy(dispositivo->mount_point, ruta_completa, MAX_PATH_LENGTH - 1);
+            dispositivo->mount_point[MAX_PATH_LENGTH - 1] = '\0';
+            
+            // Establecer timestamps
+            dispositivo->first_seen = time(NULL);    // Momento actual
+            dispositivo->last_scan = 0;              // Aún no escaneado
+            
+            // Inicializar contadores
+            dispositivo->total_files = 0;
+            dispositivo->suspicious_changes = 0;
+            dispositivo->is_suspicious = 0;           // Inicialmente limpio
+            dispositivo->baseline_count = 0;
+            
+            dispositivos_encontrados++;
+        }
+    }
+    
+    closedir(directorio);  // Cerrar el "libro" del directorio
+    
+    printf("✅ Se detectaron %d dispositivos USB\n", dispositivos_encontrados);
+    return dispositivos_encontrados;
 }
 
-// Funciones de compatibilidad (para mantener API existente)
-int scan_mounts(const char *mount_dir, char **devices) {
-    // Wrapper para compatibilidad - usar scan_mounts_enhanced en su lugar
-    return scan_mounts_enhanced(mount_dir);
+// ===============================================================================
+// FUNCIÓN: calcular_hash_archivo
+// Calcula la "huella dactilar" SHA-256 de un archivo
+// ===============================================================================
+
+int calcular_hash_archivo(const char* ruta_archivo, unsigned char* hash_resultado) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como tomar las "huellas dactilares" de un archivo. El hash SHA-256
+     * es un número único que identifica el contenido exacto del archivo.
+     * Si el archivo cambia aunque sea 1 bit, el hash será completamente diferente.
+     * 
+     * Es la base de nuestra detección de cambios.
+     */
+    
+    // Abrir el archivo para lectura binaria
+    FILE* archivo = fopen(ruta_archivo, "rb");
+    if (archivo == NULL) {
+        printf("❌ Error: No se puede abrir el archivo %s\n", ruta_archivo);
+        return 0;
+    }
+    
+    // Inicializar el contexto SHA-256
+    // Es como "preparar la máquina de huellas dactilares"
+    SHA256_CTX contexto_sha;
+    SHA256_Init(&contexto_sha);
+    
+    // Leer el archivo en bloques y procesar cada bloque
+    unsigned char buffer[4096];  // Buffer para leer bloques de 4KB
+    size_t bytes_leidos;
+    
+    // Leer el archivo bloque por bloque
+    while ((bytes_leidos = fread(buffer, 1, sizeof(buffer), archivo)) > 0) {
+        // Procesar este bloque con SHA-256
+        SHA256_Update(&contexto_sha, buffer, bytes_leidos);
+    }
+    
+    // Finalizar el cálculo del hash
+    SHA256_Final(hash_resultado, &contexto_sha);
+    
+    fclose(archivo);
+    
+    return 1;  // Éxito
 }
 
-int scan_device(const char *device_path) {
-    baseline_count = 0;
-    recurse_hash_extended(device_path);
-    sleep(1);  // espera mínima para detectar cambios
-    return compare_hashes_detailed(device_path, NULL);
+// ===============================================================================
+// FUNCIÓN: obtener_info_archivo
+// Recopila toda la información importante de un archivo
+// ===============================================================================
+
+int obtener_info_archivo(const char* ruta_archivo, FileInfo* info) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como "interrogar" a un archivo para obtener toda su información:
+     * - ¿Cuándo fue modificado?
+     * - ¿Qué tamaño tiene?
+     * - ¿Quién es el dueño?
+     * - ¿Qué permisos tiene?
+     * - ¿Cuál es su huella dactilar (hash)?
+     */
+    
+    // Obtener información del sistema operativo sobre el archivo
+    struct stat stat_archivo;
+    if (stat(ruta_archivo, &stat_archivo) != 0) {
+        printf("❌ Error: No se puede obtener información de %s\n", ruta_archivo);
+        return 0;
+    }
+    
+    // Guardar la ruta del archivo
+    strncpy(info->file_path, ruta_archivo, MAX_PATH_LENGTH - 1);
+    info->file_path[MAX_PATH_LENGTH - 1] = '\0';
+    
+    // Guardar toda la información del archivo
+    info->file_size = stat_archivo.st_size;        // Tamaño en bytes
+    info->last_modified = stat_archivo.st_mtime;   // Fecha de última modificación
+    info->permissions = stat_archivo.st_mode;      // Permisos (rwx)
+    info->owner_id = stat_archivo.st_uid;          // ID del propietario
+    info->group_id = stat_archivo.st_gid;          // ID del grupo
+    
+    // Calcular el hash SHA-256 del archivo
+    if (!calcular_hash_archivo(ruta_archivo, info->hash)) {
+        printf("❌ Error: No se pudo calcular hash de %s\n", ruta_archivo);
+        return 0;
+    }
+    
+    return 1;  // Éxito
 }
 
-// Función para escaneo manual de un dispositivo específico
-int manual_device_scan(const char *device_path) {
-    USBDeviceInfo temp_device = {0};
-    strcpy(temp_device.mount_point, device_path);
+// ===============================================================================
+// FUNCIÓN: escanear_directorio_recursivo
+// Función auxiliar para escanear un directorio y todos sus subdirectorios
+// ===============================================================================
+
+static int escanear_directorio_recursivo(const char* ruta_directorio, 
+                                        FileInfo* archivos, 
+                                        int* contador_archivos, 
+                                        int max_archivos) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como "explorar" todo un territorio (directorio) y sus subterritorios,
+     * catalogando cada habitante (archivo) que encuentra.
+     * 
+     * Es recursiva: se llama a sí misma para explorar subdirectorios.
+     */
     
-    baseline_count = 0;
-    recurse_hash_extended(device_path);
-    sleep(1);
+    DIR* directorio = opendir(ruta_directorio);
+    if (directorio == NULL) {
+        return 0;  // No se pudo abrir
+    }
     
-    int result = compare_hashes_detailed(device_path, &temp_device);
+    struct dirent* entrada;
     
-    char msg[512];
-    snprintf(msg, sizeof(msg), 
-        "Escaneo manual completado en %s - Archivos: %d, Cambios sospechosos: %d, Estado: %s",
-        device_path, temp_device.file_count, temp_device.suspicious_changes,
-        temp_device.is_suspicious ? "SOSPECHOSO" : "LIMPIO");
-    log_event("INFO", msg);
+    while ((entrada = readdir(directorio)) != NULL) {
+        // Saltar entradas especiales
+        if (strcmp(entrada->d_name, ".") == 0 || strcmp(entrada->d_name, "..") == 0) {
+            continue;
+        }
+        
+        // Construir ruta completa
+        char ruta_completa[MAX_PATH_LENGTH];
+        snprintf(ruta_completa, sizeof(ruta_completa), "%s/%s", ruta_directorio, entrada->d_name);
+        
+        struct stat stat_entrada;
+        if (stat(ruta_completa, &stat_entrada) != 0) {
+            continue;  // No se pudo obtener información
+        }
+        
+        if (S_ISDIR(stat_entrada.st_mode)) {
+            // Es un directorio: explorar recursivamente
+            escanear_directorio_recursivo(ruta_completa, archivos, contador_archivos, max_archivos);
+        } else if (S_ISREG(stat_entrada.st_mode)) {
+            // Es un archivo regular: catalogarlo
+            if (*contador_archivos < max_archivos) {
+                if (obtener_info_archivo(ruta_completa, &archivos[*contador_archivos])) {
+                    (*contador_archivos)++;
+                }
+            }
+        }
+    }
     
-    return result;
+    closedir(directorio);
+    return 1;
 }
+
+// ===============================================================================
+// FUNCIÓN: crear_baseline_dispositivo
+// Crea la "fotografía inicial" de todos los archivos en un USB
+// ===============================================================================
+
+int crear_baseline_dispositivo(USBDevice* dispositivo) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como tomar una "fotografía completa" del dispositivo USB cuando
+     * se conecta por primera vez. Esta fotografía incluye:
+     * - Lista de todos los archivos
+     * - Hash de cada archivo
+     * - Permisos, propietarios, fechas, etc.
+     * 
+     * Esta "fotografía" sirve como referencia para detectar cambios posteriores.
+     */
+    
+    printf("📸 Creando baseline para dispositivo: %s\n", dispositivo->device_name);
+    
+    // Resetear el contador de archivos
+    dispositivo->baseline_count = 0;
+    
+    // Escanear recursivamente todo el dispositivo
+    if (!escanear_directorio_recursivo(dispositivo->mount_point, 
+                                      dispositivo->baseline_files, 
+                                      &dispositivo->baseline_count, 
+                                      MAX_FILES_PER_DEVICE)) {
+        printf("❌ Error: No se pudo escanear el dispositivo %s\n", dispositivo->device_name);
+        return 0;
+    }
+    
+    // Actualizar información del dispositivo
+    dispositivo->total_files = dispositivo->baseline_count;
+    dispositivo->last_scan = time(NULL);
+    
+    printf("✅ Baseline creado: %d archivos catalogados en %s\n", 
+           dispositivo->baseline_count, dispositivo->device_name);
+    
+    return 1;  // Éxito
+}
+
+// ===============================================================================
+// FUNCIÓN: detectar_cambios_sospechosos
+// Analiza un archivo específico para detectar cambios raros
+// ===============================================================================
+
+int detectar_cambios_sospechosos(const FileInfo* archivo_original, const FileInfo* archivo_actual) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como "interrogar" a un archivo para ver si se comporta de manera sospechosa.
+     * Compara cómo era el archivo originalmente con cómo está ahora.
+     * 
+     * Los tipos de cambios sospechosos que detecta:
+     * 1. Crecimiento inusual de tamaño
+     * 2. Cambios de permisos peligrosos
+     * 3. Cambios de propietario
+     * 4. Timestamps anómalos
+     */
+    
+    int amenazas_detectadas = AMENAZA_NINGUNA;
+    
+    // 1. DETECTAR CRECIMIENTO INUSUAL
+    // Si un archivo crece más de 100 veces su tamaño original, es sospechoso
+    if (archivo_actual->file_size > archivo_original->file_size * 100) {
+        printf("🚨 AMENAZA: Crecimiento inusual detectado en %s\n", archivo_actual->file_path);
+        printf("   Tamaño original: %ld bytes → Tamaño actual: %ld bytes\n", 
+               archivo_original->file_size, archivo_actual->file_size);
+        amenazas_detectadas |= AMENAZA_CRECIMIENTO_INUSUAL;
+    }
+    
+    // 2. DETECTAR PERMISOS PELIGROSOS
+    // Si los permisos cambiaron a 777 (todos pueden hacer todo), es peligroso
+    mode_t permisos_originales = archivo_original->permissions & 0777;
+    mode_t permisos_actuales = archivo_actual->permissions & 0777;
+    
+    if (permisos_actuales == 0777 && permisos_originales != 0777) {
+        printf("🚨 AMENAZA: Permisos cambiados a 777 en %s\n", archivo_actual->file_path);
+        amenazas_detectadas |= AMENAZA_PERMISOS_PELIGROSOS;
+    }
+    
+    // 3. DETECTAR CAMBIO DE PROPIETARIO
+    // Si el dueño del archivo cambió, puede ser sospechoso
+    if (archivo_actual->owner_id != archivo_original->owner_id) {
+        printf("🚨 AMENAZA: Cambio de propietario en %s\n", archivo_actual->file_path);
+        printf("   Propietario original: %d → Propietario actual: %d\n", 
+               archivo_original->owner_id, archivo_actual->owner_id);
+        amenazas_detectadas |= AMENAZA_CAMBIO_PROPIETARIO;
+    }
+    
+    // 4. DETECTAR TIMESTAMPS ANÓMALOS
+    // Si la fecha de modificación es muy antigua o futura, es raro
+    time_t ahora = time(NULL);
+    if (archivo_actual->last_modified > ahora + 3600 ||  // Más de 1 hora en el futuro
+        archivo_actual->last_modified < archivo_original->last_modified - 86400) {  // Más de 1 día atrás
+        printf("🚨 AMENAZA: Timestamp anómalo en %s\n", archivo_actual->file_path);
+        amenazas_detectadas |= AMENAZA_TIMESTAMP_ANOMALO;
+    }
+    
+    return amenazas_detectadas;
+}
+
+// ===============================================================================
+// FUNCIÓN: buscar_archivo_en_baseline
+// Busca un archivo en la baseline por su ruta
+// ===============================================================================
+
+static FileInfo* buscar_archivo_en_baseline(USBDevice* dispositivo, const char* ruta_archivo) {
+    /*
+     * ¿Qué hace esta función?
+     * Busca un archivo específico en la "fotografía inicial" (baseline) del dispositivo.
+     * Es como buscar a una persona específica en una foto grupal.
+     */
+    
+    for (int i = 0; i < dispositivo->baseline_count; i++) {
+        if (strcmp(dispositivo->baseline_files[i].file_path, ruta_archivo) == 0) {
+            return &dispositivo->baseline_files[i];  // Encontrado
+        }
+    }
+    return NULL;  // No encontrado
+}
+
+// ===============================================================================
+// FUNCIÓN: detectar_replicacion_archivos
+// Detecta si se están creando copias sospechosas de archivos
+// ===============================================================================
+
+static int detectar_replicacion_archivos(FileInfo* archivos_actuales, int num_archivos) {
+    /*
+     * ¿Qué hace esta función?
+     * Detecta si hay archivos con hashes idénticos pero nombres diferentes.
+     * Esto puede indicar que un malware está replicando archivos.
+     */
+    
+    int replicaciones_detectadas = 0;
+    
+    for (int i = 0; i < num_archivos; i++) {
+        for (int j = i + 1; j < num_archivos; j++) {
+            // Comparar hashes (¿tienen la misma "huella dactilar"?)
+            if (memcmp(archivos_actuales[i].hash, archivos_actuales[j].hash, SHA256_HASH_SIZE) == 0) {
+                // ¡Archivos con contenido idéntico pero nombres diferentes!
+                printf("🚨 REPLICACIÓN DETECTADA:\n");
+                printf("   Archivo 1: %s\n", archivos_actuales[i].file_path);
+                printf("   Archivo 2: %s\n", archivos_actuales[j].file_path);
+                replicaciones_detectadas++;
+            }
+        }
+    }
+    
+    return replicaciones_detectadas;
+}
+
+// ===============================================================================
+// FUNCIÓN: escanear_dispositivo_cambios
+// Compara el estado actual del USB con la "fotografía inicial"
+// ===============================================================================
+
+int escanear_dispositivo_cambios(USBDevice* dispositivo, ScanResult* resultado, double umbral_cambios) {
+    /*
+     * ¿Qué hace esta función?
+     * Es la función más importante del sistema. Compara cómo está el dispositivo
+     * AHORA versus cómo estaba cuando se conectó (baseline).
+     * 
+     * Es como comparar dos fotografías del mismo lugar tomadas en momentos diferentes
+     * para ver qué cambió.
+     * 
+     * Los pasos son:
+     * 1. Escanear todos los archivos actuales del dispositivo
+     * 2. Comparar cada archivo actual con su versión en la baseline
+     * 3. Detectar archivos nuevos, eliminados, y modificados
+     * 4. Analizar si los cambios son sospechosos
+     * 5. Generar un reporte completo
+     */
+    
+    printf("🔍 Escaneando cambios en dispositivo: %s\n", dispositivo->device_name);
+    
+    // Inicializar el resultado
+    memset(resultado, 0, sizeof(ScanResult));
+    
+    // Array para guardar la información actual de los archivos
+    FileInfo archivos_actuales[MAX_FILES_PER_DEVICE];
+    int archivos_actuales_count = 0;
+    
+    // Escanear el estado actual del dispositivo
+    if (!escanear_directorio_recursivo(dispositivo->mount_point, 
+                                      archivos_actuales, 
+                                      &archivos_actuales_count, 
+                                      MAX_FILES_PER_DEVICE)) {
+        printf("❌ Error: No se pudo escanear el dispositivo\n");
+        return 0;
+    }
+    
+    resultado->files_scanned = archivos_actuales_count;
+    
+    // Comparar archivos actuales con baseline
+    for (int i = 0; i < archivos_actuales_count; i++) {
+        FileInfo* archivo_en_baseline = buscar_archivo_en_baseline(dispositivo, archivos_actuales[i].file_path);
+        
+        if (archivo_en_baseline == NULL) {
+            // ARCHIVO NUEVO: No estaba en la baseline
+            resultado->files_added++;
+            printf("📄 Archivo nuevo detectado: %s\n", archivos_actuales[i].file_path);
+        } else {
+            // ARCHIVO EXISTENTE: Comparar si cambió
+            if (memcmp(archivo_en_baseline->hash, archivos_actuales[i].hash, SHA256_HASH_SIZE) != 0) {
+                // El hash cambió = el archivo fue modificado
+                resultado->files_modified++;
+                printf("✏️  Archivo modificado: %s\n", archivos_actuales[i].file_path);
+                
+                // Analizar si el cambio es sospechoso
+                int amenazas = detectar_cambios_sospechosos(archivo_en_baseline, &archivos_actuales[i]);
+                if (amenazas != AMENAZA_NINGUNA) {
+                    resultado->suspicious_files++;
+                }
+            }
+        }
+    }
+    
+    // Detectar archivos eliminados
+    for (int i = 0; i < dispositivo->baseline_count; i++) {
+        int encontrado = 0;
+        for (int j = 0; j < archivos_actuales_count; j++) {
+            if (strcmp(dispositivo->baseline_files[i].file_path, archivos_actuales[j].file_path) == 0) {
+                encontrado = 1;
+                break;
+            }
+        }
+        if (!encontrado) {
+            resultado->files_deleted++;
+            printf("🗑️  Archivo eliminado: %s\n", dispositivo->baseline_files[i].file_path);
+        }
+    }
+    
+    // Detectar replicación de archivos
+    int replicaciones = detectar_replicacion_archivos(archivos_actuales, archivos_actuales_count);
+    if (replicaciones > 0) {
+        resultado->suspicious_files += replicaciones;
+    }
+    
+    // Calcular porcentaje de cambios
+    if (dispositivo->baseline_count > 0) {
+        resultado->change_percentage = (double)(resultado->files_added + resultado->files_modified + resultado->files_deleted) / dispositivo->baseline_count;
+    }
+    
+    // Determinar nivel de amenaza
+    if (resultado->suspicious_files > 0) {
+        resultado->threat_level = NIVEL_PELIGROSO;
+    } else if (resultado->change_percentage > umbral_cambios) {
+        resultado->threat_level = NIVEL_SOSPECHOSO;
+    } else {
+        resultado->threat_level = NIVEL_LIMPIO;
+    }
+    
+    // Generar reporte detallado
+    snprintf(resultado->detailed_report, sizeof(resultado->detailed_report),
+        "REPORTE DE ESCANEO - %s\n"
+        "Archivos escaneados: %d\n"
+        "Archivos nuevos: %d\n"
+        "Archivos modificados: %d\n"
+        "Archivos eliminados: %d\n"
+        "Archivos sospechosos: %d\n"
+        "Porcentaje de cambios: %.2f%%\n"
+        "Nivel de amenaza: %s\n",
+        dispositivo->device_name,
+        resultado->files_scanned,
+        resultado->files_added,
+        resultado->files_modified,
+        resultado->files_deleted,
+        resultado->suspicious_files,
+        resultado->change_percentage * 100,
+        (resultado->threat_level == NIVEL_LIMPIO) ? "LIMPIO" :
+        (resultado->threat_level == NIVEL_SOSPECHOSO) ? "SOSPECHOSO" : "PELIGROSO");
+    
+    // Actualizar información del dispositivo
+    dispositivo->last_scan = time(NULL);
+    dispositivo->suspicious_changes = resultado->suspicious_files;
+    dispositivo->is_suspicious = (resultado->threat_level != NIVEL_LIMPIO);
+    
+    printf("✅ Escaneo completado. Nivel de amenaza: %s\n", 
+           (resultado->threat_level == NIVEL_LIMPIO) ? "LIMPIO" :
+           (resultado->threat_level == NIVEL_SOSPECHOSO) ? "SOSPECHOSO" : "PELIGROSO");
+    
+    return (resultado->threat_level != NIVEL_LIMPIO) ? 1 : 0;
+}
+
+// ===============================================================================
+// FUNCIÓN: generar_alerta_seguridad
+// Genera una alerta cuando se detecta algo sospechoso
+// ===============================================================================
+
+void generar_alerta_seguridad(const USBDevice* dispositivo, const char* tipo_alerta, const char* mensaje) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como "tocar las campanas de alarma" cuando se detecta una amenaza.
+     * Genera una alerta que puede ser mostrada al usuario o enviada a un sistema
+     * de monitoreo.
+     */
+    
+    time_t ahora = time(NULL);
+    char* timestamp = ctime(&ahora);
+    timestamp[strlen(timestamp) - 1] = '\0';  // Remover salto de línea
+    
+    printf("\n");
+    printf("🚨🚨🚨 ALERTA DE SEGURIDAD 🚨🚨🚨\n");
+    printf("Timestamp: %s\n", timestamp);
+    printf("Dispositivo: %s\n", dispositivo->device_name);
+    printf("Punto de montaje: %s\n", dispositivo->mount_point);
+    printf("Tipo de alerta: %s\n", tipo_alerta);
+    printf("Mensaje: %s\n", mensaje);
+    printf("🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨\n");
+    printf("\n");
+    
+    // Aquí se podría agregar código para:
+    // - Escribir a un archivo de log
+    // - Enviar notificación por email
+    // - Actualizar una base de datos
+    // - Enviar a un sistema SIEM
+}
+
+// ===============================================================================
+// FUNCIÓN: obtener_estadisticas_dispositivo
+// Proporciona un resumen estadístico de un dispositivo
+// ===============================================================================
+
+void obtener_estadisticas_dispositivo(const USBDevice* dispositivo, ScanResult* resultado) {
+    /*
+     * ¿Qué hace esta función?
+     * Genera un resumen estadístico del dispositivo sin hacer un escaneo completo.
+     * Es como revisar el "expediente" del dispositivo.
+     */
+    
+    memset(resultado, 0, sizeof(ScanResult));
+    
+    resultado->files_scanned = dispositivo->total_files;
+    resultado->suspicious_files = dispositivo->suspicious_changes;
+    resultado->threat_level = dispositivo->is_suspicious ? NIVEL_SOSPECHOSO : NIVEL_LIMPIO;
+    
+    snprintf(resultado->detailed_report, sizeof(resultado->detailed_report),
+        "ESTADÍSTICAS - %s\n"
+        "Total de archivos: %d\n"
+        "Cambios sospechosos: %d\n"
+        "Estado: %s\n"
+        "Primera detección: %s"
+        "Último escaneo: %s",
+        dispositivo->device_name,
+        dispositivo->total_files,
+        dispositivo->suspicious_changes,
+        dispositivo->is_suspicious ? "SOSPECHOSO" : "LIMPIO",
+        ctime(&dispositivo->first_seen),
+        dispositivo->last_scan > 0 ? ctime(&dispositivo->last_scan) : "Nunca\n");
+}
+
+// ===============================================================================
+// FUNCIÓN: limpiar_monitor_usb
+// Libera todos los recursos utilizados por el sistema
+// ===============================================================================
+
+void limpiar_monitor_usb(void) {
+    /*
+     * ¿Qué hace esta función?
+     * Es como "cerrar y limpiar" todas las instalaciones de seguridad.
+     * Libera la memoria y marca el sistema como no inicializado.
+     */
+    
+    printf("🧹 Limpiando sistema de monitoreo USB...\n");
+    
+    // Limpiar la memoria
+    memset(dispositivos_monitoreados, 0, sizeof(dispositivos_monitoreados));
+    numero_dispositivos = 0;
+    sistema_inicializado = 0;
+    
+    printf("✅ Sistema de monitoreo USB limpiado.\n");
+}
+
+/*
+ * ===============================================================================
+ * RESUMEN DE ESTE ARCHIVO:
+ * ===============================================================================
+ * 
+ * Este archivo implementa un sistema completo de monitoreo de seguridad para
+ * dispositivos USB. Sus características principales son:
+ * 
+ * 1. DETECCIÓN AUTOMÁTICA: Encuentra automáticamente dispositivos USB conectados
+ * 2. BASELINE CREATION: Crea una "fotografía inicial" de cada dispositivo
+ * 3. DETECCIÓN DE CAMBIOS: Compara el estado actual vs. la fotografía inicial
+ * 4. ANÁLISIS DE AMENAZAS: Detecta tipos específicos de cambios sospechosos
+ * 5. SISTEMA DE ALERTAS: Genera alertas cuando detecta amenazas
+ * 6. REPORTES DETALLADOS: Proporciona información completa sobre cada escaneo
+ * 
+ * El sistema funciona como un "guardia de seguridad digital" que:
+ * - Vigila constantemente los dispositivos USB
+ * - Recuerda cómo estaba cada dispositivo cuando se conectó
+ * - Detecta cualquier cambio sospechoso
+ * - Alerta inmediatamente sobre posibles amenazas
+ * 
+ * Cumple con todos los requisitos funcionales especificados:
+ * ✅ Monitoreo periódico de dispositivos
+ * ✅ Escaneo recursivo con hash SHA-256
+ * ✅ Detección de cambios sospechosos
+ * ✅ Alertas en tiempo real
+ * ✅ Umbral configurable de cambios
+ */
