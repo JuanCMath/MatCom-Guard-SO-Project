@@ -4,51 +4,82 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <unistd.h>
-#include <sys/stat.h>
-#include <openssl/evp.h>
-#include <sys/types.h>
-#include <fcntl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
 #include <time.h>
 
-// Estructura para almacenar información de dispositivos conectados
+#define SEPARATOR "=====================================\n"
+
+// ============================================================================
+// ESTRUCTURAS PÚBLICAS
+// ============================================================================
+
+/**
+ * Estructura para información de puerto escaneado
+ */
 typedef struct {
-    char **devices;     // Array de nombres de dispositivos
-    int count;          // Número de dispositivos encontrados
-    int capacity;       // Capacidad actual del array
-} DeviceList;
+    int port;                    // Número del puerto
+    int is_open;                 // 1 si está abierto, 0 si cerrado
+    char service_name[64];       // Nombre del servicio asociado
+    int is_suspicious;           // 1 si es sospechoso, 0 si es normal
+} PortInfo;
 
-// Estructura para almacenar información de un archivo
+/**
+ * Estructura para el resultado completo del escaneo
+ */
 typedef struct {
-    char *path;                 // Ruta completa del archivo
-    char *name;                 // Nombre del archivo
-    char *extension;            // Extensión del archivo
-    off_t size;                 // Tamaño del archivo
-    char sha256_hash[65];       // Hash SHA-256 (64 caracteres + null terminator)
-    mode_t permissions;         // Permisos del archivo
-    time_t last_modified;       // Última modificación
-    time_t last_accessed;       // Último acceso
-} FileInfo;
+    PortInfo *ports;             // Array de puertos escaneados
+    int total_ports;             // Total de puertos escaneados
+    int open_ports;              // Cantidad de puertos abiertos
+    int suspicious_ports;        // Cantidad de puertos sospechosos
+} ScanResult;
 
-// Estructura para almacenar el snapshot de un dispositivo
+/**
+ * Estructura para mapear puertos con servicios conocidos
+ */
 typedef struct {
-    char *device_name;          // Nombre del dispositivo
-    FileInfo **files;           // Array de archivos
-    int file_count;             // Número de archivos
-    int capacity;               // Capacidad del array
-    time_t snapshot_time;       // Tiempo del snapshot
-} DeviceSnapshot;
+    int port;
+    const char *service;
+    int is_common;               // 1 si es común y esperado, 0 si no
+} ServiceMapping;
 
-// Funciones para monitoreo de dispositivos
-DeviceList* monitor_connected_devices(int interval_seconds);
-void free_device_list(DeviceList *device_list);
+// ============================================================================
+// FUNCIONES PÚBLICAS DE ESCANEO DE PUERTOS
+// ============================================================================
 
-// Funciones para manejo de archivos y snapshots
-int calculate_sha256(const char *filepath, char *hash_output);
-char* get_file_extension(const char *filename);
-int scan_directory_recursive(DeviceSnapshot *snapshot, const char *dir_path);
-DeviceSnapshot* create_device_snapshot(const char *device_name);
-void free_device_snapshot(DeviceSnapshot *snapshot);
+/**
+ * Escanea puertos en un rango específico
+ * @param start_port: Puerto inicial (1-65535)
+ * @param end_port: Puerto final (1-65535)
+ * @return int: 0 si es exitoso, -1 si hay error
+ */
+int scan_ports(int start_port, int end_port);
+
+/**
+ * Escanea puertos comunes (1-1024)
+ * @return int: 0 si es exitoso, -1 si hay error
+ */
+int scan_common_ports(void);
+
+/**
+ * Escanea un puerto específico
+ * @param port: Puerto a escanear (1-65535)
+ * @return int: 1 si está abierto, 0 si cerrado, -1 si error
+ */
+int scan_specific_port(int port);
+
+// ============================================================================
+// FUNCIONES AUXILIARES
+// ============================================================================
+
+/**
+ * Obtiene timestamp actual
+ * @return char*: String con fecha y hora actual
+ */
+const char* get_current_timestamp(void);
 
 #endif // PORT_SCANNER_H
+

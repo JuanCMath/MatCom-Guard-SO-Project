@@ -1,307 +1,390 @@
 #include "../include/port_scanner.h"
 
 // ============================================================================
-// FUNCIONES DE MONITOREO DE DISPOSITIVOS
+// MAPEO DE SERVICIOS COMUNES (DATOS ESTÁTICOS)
 // ============================================================================
 
 /**
- * Función que monitorea periódicamente el directorio /media para detectar
- * nuevos dispositivos conectados (puertas de entrada del reino)
- * 
- * @param interval_seconds: Intervalo en segundos entre cada verificación
- * @return DeviceList*: Puntero a estructura con lista de dispositivos conectados
+ * Tabla de servicios comunes y sus puertos asociados
  */
-DeviceList* monitor_connected_devices(int interval_seconds) {
-    // Inicializar la estructura de lista de dispositivos
-    DeviceList *device_list = malloc(sizeof(DeviceList));
-    device_list->devices = malloc(10 * sizeof(char*)); // Capacidad inicial de 10 dispositivos
-    device_list->count = 0;
-    device_list->capacity = 10;
-    
-    // Directorio típico donde se montan dispositivos USB en Linux
-    const char *mount_dir = "/media";
-    DIR *dir;
-    struct dirent *entry;
-    struct stat statbuf;
-    char full_path[512];
-    
-    printf("Iniciando monitoreo de dispositivos conectados...\n");
-    
-    while (1) {
-        // Limpiar la lista anterior de dispositivos
-        for (int i = 0; i < device_list->count; i++) {
-            free(device_list->devices[i]);
+static const ServiceMapping common_services[] = {
+    {21, "FTP", 1},
+    {22, "SSH", 1},
+    {23, "Telnet", 0},           // Sospechoso por inseguro
+    {25, "SMTP", 1},
+    {53, "DNS", 1},
+    {80, "HTTP", 1},
+    {110, "POP3", 1},
+    {143, "IMAP", 1},
+    {443, "HTTPS", 1},
+    {993, "IMAPS", 1},
+    {995, "POP3S", 1},
+    {3389, "RDP", 0},            // Sospechoso si está expuesto
+    {4444, "Metasploit", 0},     // Puerto común para backdoors
+    {5900, "VNC", 0},            // Sospechoso si está expuesto
+    {6667, "IRC", 0},            // Sospechoso para backdoors
+    {8080, "HTTP-Alt", 1},       // Común para servidores web alternativos
+    {31337, "Elite/Backdoor", 0}, // Puerto típico de backdoors
+    {0, NULL, 0}                 // Terminador
+};
+
+// ============================================================================
+// FUNCIONES DE DETECCIÓN DE SERVICIOS
+// ============================================================================
+
+/**
+ * Obtiene el nombre del servicio asociado a un puerto
+ * 
+ * @param port: Número del puerto
+ * @param service_name: Buffer donde se almacenará el nombre del servicio
+ * @param buffer_size: Tamaño del buffer
+ * @return int: 1 si es un servicio común, 0 si es sospechoso o desconocido
+ */
+static int get_service_name(int port, char *service_name, size_t buffer_size) {
+    for (int i = 0; common_services[i].service != NULL; i++) {
+        if (common_services[i].port == port) {
+            snprintf(service_name, buffer_size, "%s", common_services[i].service);
+            return common_services[i].is_common;
         }
-        device_list->count = 0;
-        
-        // Abrir el directorio de montaje
-        dir = opendir(mount_dir);
-        if (dir == NULL) {
-            perror("Error al abrir directorio de montaje");
-            sleep(interval_seconds);
-            continue;
-        }
-        
-        // Leer todas las entradas del directorio
-        while ((entry = readdir(dir)) != NULL) {
-            // Saltar directorios especiales . y ..
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                continue;
-            }
-            
-            // Construir la ruta completa del dispositivo
-            snprintf(full_path, sizeof(full_path), "%s/%s", mount_dir, entry->d_name);
-            
-            // Verificar si es un directorio (dispositivo montado)
-            if (stat(full_path, &statbuf) == 0 && S_ISDIR(statbuf.st_mode)) {
-                // Verificar si necesitamos expandir el array
-                if (device_list->count >= device_list->capacity) {
-                    device_list->capacity *= 2;
-                    device_list->devices = realloc(device_list->devices, 
-                                                 device_list->capacity * sizeof(char*));
-                }
-                
-                // Agregar el dispositivo a la lista
-                device_list->devices[device_list->count] = malloc(strlen(entry->d_name) + 1);
-                strcpy(device_list->devices[device_list->count], entry->d_name);
-                device_list->count++;
-                
-                printf("Dispositivo detectado: %s (Ruta: %s)\n", entry->d_name, full_path);
-            }
-        }
-        
-        // Cerrar el directorio
-        closedir(dir);
-        
-        // Mostrar resumen de dispositivos conectados
-        printf("Total de dispositivos conectados: %d\n", device_list->count);
-        for (int i = 0; i < device_list->count; i++) {
-            printf("  - %s\n", device_list->devices[i]);
-        }
-        printf("---\n");
-        
-        // Esperar el intervalo especificado antes de la siguiente verificación
-        sleep(interval_seconds);
     }
     
-    return device_list;
+    // Puerto desconocido
+    snprintf(service_name, buffer_size, "Unknown");
+    return 0;
 }
 
 /**
- * Función para liberar la memoria de la lista de dispositivos
+ * Determina si un puerto es sospechoso basado en criterios de seguridad
  * 
- * @param device_list: Puntero a la estructura DeviceList a liberar
+ * @param port: Número del puerto
+ * @param service_name: Nombre del servicio asociado
+ * @return int: 1 si es sospechoso, 0 si es normal
  */
-void free_device_list(DeviceList *device_list) {
-    if (device_list != NULL) {
-        // Liberar cada nombre de dispositivo
-        for (int i = 0; i < device_list->count; i++) {
-            free(device_list->devices[i]);
-        }
-        // Liberar el array de dispositivos
-        free(device_list->devices);
-        // Liberar la estructura principal
-        free(device_list);
+static int is_port_suspicious(int port, const char *service_name) {
+    // Puertos conocidos como backdoors
+    if (port == 31337 || port == 4444 || port == 6667) {
+        return 1;
     }
+    
+    // Servicios inseguros
+    if (strcmp(service_name, "Telnet") == 0 || 
+        strcmp(service_name, "RDP") == 0 || 
+        strcmp(service_name, "VNC") == 0) {
+        return 1;
+    }
+    
+    // Puertos altos sin justificación común
+    if (port > 1024 && strcmp(service_name, "Unknown") == 0) {
+        return 1;
+    }
+    
+    return 0;
 }
 
 // ============================================================================
-// FUNCIONES DE MANEJO DE ARCHIVOS Y SNAPSHOTS
+// FUNCIONES DE ESCANEO DE PUERTOS
 // ============================================================================
 
 /**
- * Calcula el hash SHA-256 de un archivo
+ * Intenta establecer conexión TCP a un puerto específico
  * 
- * @param filepath: Ruta del archivo
- * @param hash_output: Buffer donde se almacenará el hash (debe ser de al menos 65 bytes)
+ * @param port: Puerto a escanear
+ * @return int: 1 si el puerto está abierto, 0 si está cerrado
+ */
+static int scan_single_port(int port) {
+    int sock;
+    struct sockaddr_in target;
+    int result;
+    
+    // Crear socket TCP
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return 0;
+    }
+    
+    // Configurar timeout para evitar bloqueos largos
+    struct timeval timeout;
+    timeout.tv_sec = 1;  // 1 segundo timeout
+    timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
+    
+    // Configurar dirección de destino (localhost)
+    memset(&target, 0, sizeof(target));
+    target.sin_family = AF_INET;
+    target.sin_port = htons(port);
+    target.sin_addr.s_addr = inet_addr("127.0.0.1");
+    
+    // Intentar conexión
+    result = connect(sock, (struct sockaddr *)&target, sizeof(target));
+    
+    close(sock);
+    
+    return (result == 0) ? 1 : 0;
+}
+
+/**
+ * Escanea un rango de puertos y genera información detallada
+ * 
+ * @param start_port: Puerto inicial del rango
+ * @param end_port: Puerto final del rango
+ * @param result: Estructura donde se almacenarán los resultados
  * @return int: 0 si es exitoso, -1 si hay error
  */
-int calculate_sha256(const char *filepath, char *hash_output) {
-    FILE *file = fopen(filepath, "rb");
+static int scan_port_range(int start_port, int end_port, ScanResult *result) {
+    if (!result || start_port < 1 || end_port > 65535 || start_port > end_port) {
+        return -1;
+    }
+    
+    int total_ports = end_port - start_port + 1;
+    result->ports = malloc(total_ports * sizeof(PortInfo));
+    if (!result->ports) {
+        return -1;
+    }
+    
+    result->total_ports = total_ports;
+    result->open_ports = 0;
+    result->suspicious_ports = 0;
+    
+    printf("Iniciando escaneo de puertos %d-%d...\n", start_port, end_port);
+    
+    for (int port = start_port; port <= end_port; port++) {
+        int index = port - start_port;
+        PortInfo *port_info = &result->ports[index];
+        
+        // Inicializar información del puerto
+        port_info->port = port;
+        port_info->is_open = scan_single_port(port);
+        
+        if (port_info->is_open) {
+            result->open_ports++;
+            
+            // Obtener información del servicio
+            get_service_name(port, port_info->service_name, 
+                           sizeof(port_info->service_name));
+            
+            // Determinar si es sospechoso
+            port_info->is_suspicious = is_port_suspicious(port, port_info->service_name);
+            
+            if (port_info->is_suspicious) {
+                result->suspicious_ports++;
+            }
+            
+            // Mostrar resultado inmediatamente
+            if (port_info->is_suspicious) {
+                printf("[ALERTA] Puerto %d/tcp abierto (%s) - SOSPECHOSO\n", 
+                       port, port_info->service_name);
+            } else {
+                printf("[OK] Puerto %d/tcp (%s) abierto (esperado)\n", 
+                       port, port_info->service_name);
+            }
+        }
+        
+        // Mostrar progreso cada 100 puertos
+        if ((port - start_port + 1) % 100 == 0) {
+            printf("Progreso: %d/%d puertos escaneados\n", 
+                   port - start_port + 1, total_ports);
+        }
+    }
+    
+    return 0;
+}
+
+// ============================================================================
+// FUNCIONES DE GENERACIÓN DE INFORMES
+// ============================================================================
+
+/**
+ * Genera un informe detallado de los resultados del escaneo
+ * 
+ * @param result: Resultados del escaneo
+ */
+static void generate_scan_report(const ScanResult *result) {
+    if (!result) {
+        return;
+    }
+    
+    printf("\n" SEPARATOR);
+    printf("INFORME DE ESCANEO DE PUERTOS\n");
+    printf(SEPARATOR);
+    
+    printf("Total de puertos escaneados: %d\n", result->total_ports);
+    printf("Puertos abiertos encontrados: %d\n", result->open_ports);
+    printf("Puertos sospechosos: %d\n", result->suspicious_ports);
+    
+    if (result->open_ports == 0) {
+        printf("\n[INFO] No se encontraron puertos abiertos.\n");
+        return;
+    }
+    
+    printf("\nDETALLE DE PUERTOS ABIERTOS:\n");
+    printf("Puerto\tServicio\t\tEstado\n");
+    printf("------\t--------\t\t------\n");
+    
+    for (int i = 0; i < result->total_ports; i++) {
+        const PortInfo *port = &result->ports[i];
+        if (port->is_open) {
+            const char *status = port->is_suspicious ? "SOSPECHOSO" : "NORMAL";
+            printf("%d\t%-15s\t%s\n", port->port, port->service_name, status);
+        }
+    }
+    
+    if (result->suspicious_ports > 0) {
+        printf("\n[ADVERTENCIA] Se encontraron %d puerto(s) sospechoso(s).\n", 
+               result->suspicious_ports);
+        printf("Se recomienda investigar estos puertos para verificar su legitimidad.\n");
+    } else {
+        printf("\n[OK] Todos los puertos abiertos corresponden a servicios esperados.\n");
+    }
+}
+
+/**
+ * Guarda el informe de escaneo en un archivo
+ * 
+ * @param result: Resultados del escaneo
+ * @param filename: Nombre del archivo donde guardar
+ * @return int: 0 si es exitoso, -1 si hay error
+ */
+static int save_scan_report(const ScanResult *result, const char *filename) {
+    if (!result || !filename) {
+        return -1;
+    }
+    
+    FILE *file = fopen(filename, "w");
     if (!file) {
+        printf("Error: No se pudo crear el archivo de informe: %s\n", filename);
         return -1;
     }
     
-    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-    if (!mdctx) {
-        fclose(file);
-        return -1;
-    }
+    // Escribir encabezado
+    fprintf(file, "INFORME DE ESCANEO DE PUERTOS\n");
+    fprintf(file, "Fecha: %s", get_current_timestamp());
+    fprintf(file, "=====================================\n\n");
     
-    if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1) {
-        EVP_MD_CTX_free(mdctx);
-        fclose(file);
-        return -1;
-    }
+    // Escribir resumen
+    fprintf(file, "RESUMEN:\n");
+    fprintf(file, "Total de puertos escaneados: %d\n", result->total_ports);
+    fprintf(file, "Puertos abiertos: %d\n", result->open_ports);
+    fprintf(file, "Puertos sospechosos: %d\n\n", result->suspicious_ports);
     
-    unsigned char buffer[8192];
-    size_t bytes_read;
-    
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        if (EVP_DigestUpdate(mdctx, buffer, bytes_read) != 1) {
-            EVP_MD_CTX_free(mdctx);
-            fclose(file);
-            return -1;
+    // Escribir detalles
+    fprintf(file, "DETALLES DE PUERTOS ABIERTOS:\n");
+    for (int i = 0; i < result->total_ports; i++) {
+        const PortInfo *port = &result->ports[i];
+        if (port->is_open) {
+            fprintf(file, "Puerto %d/tcp - %s", port->port, port->service_name);
+            if (port->is_suspicious) {
+                fprintf(file, " [SOSPECHOSO]");
+            }
+            fprintf(file, "\n");
         }
     }
     
-    unsigned char hash[EVP_MAX_MD_SIZE];
-    unsigned int hash_len;
-    
-    if (EVP_DigestFinal_ex(mdctx, hash, &hash_len) != 1) {
-        EVP_MD_CTX_free(mdctx);
-        fclose(file);
-        return -1;
-    }
-    
-    // Convertir a string hexadecimal
-    for (unsigned int i = 0; i < hash_len; i++) {
-        sprintf(hash_output + (i * 2), "%02x", hash[i]);
-    }
-    hash_output[hash_len * 2] = '\0';
-    
-    EVP_MD_CTX_free(mdctx);
     fclose(file);
+    printf("Informe guardado en: %s\n", filename);
     return 0;
 }
 
-/**
- * Obtiene la extensión de un archivo
- * 
- * @param filename: Nombre del archivo
- * @return char*: Extensión del archivo (debe ser liberada)
- */
-char* get_file_extension(const char *filename) {
-    const char *dot = strrchr(filename, '.');
-    if (!dot || dot == filename) {
-        return strdup(""); // Sin extensión
-    }
-    return strdup(dot + 1);
-}
+// ============================================================================
+// FUNCIONES PÚBLICAS DE LA INTERFAZ
+// ============================================================================
 
 /**
- * Escanea recursivamente un directorio y almacena información de archivos
+ * Escanea puertos en un rango específico y genera informe
  * 
- * @param snapshot: Puntero al snapshot donde almacenar la información
- * @param dir_path: Ruta del directorio a escanear
+ * @param start_port: Puerto inicial (1-65535)
+ * @param end_port: Puerto final (1-65535)
  * @return int: 0 si es exitoso, -1 si hay error
  */
-int scan_directory_recursive(DeviceSnapshot *snapshot, const char *dir_path) {
-    DIR *dir = opendir(dir_path);
-    if (!dir) {
+int scan_ports(int start_port, int end_port) {
+    ScanResult result;
+    memset(&result, 0, sizeof(result));
+    
+    printf("=== ESCANEADOR DE PUERTOS MATCOM-GUARD ===\n");
+    printf("Analizando puertos locales para detectar posibles amenazas...\n\n");
+    
+    // Realizar escaneo
+    if (scan_port_range(start_port, end_port, &result) != 0) {
+        printf("Error: Fallo en el escaneo de puertos\n");
         return -1;
     }
     
-    struct dirent *entry;
-    struct stat file_stat;
-    char full_path[1024];
+    // Generar informe en consola
+    generate_scan_report(&result);
     
-    while ((entry = readdir(dir)) != NULL) {
-        // Saltar directorios especiales
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-        
-        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
-        
-        if (stat(full_path, &file_stat) != 0) {
-            continue; // Error al obtener información del archivo
-        }
-        
-        if (S_ISDIR(file_stat.st_mode)) {
-            // Es un directorio, escanear recursivamente
-            scan_directory_recursive(snapshot, full_path);
-        } else if (S_ISREG(file_stat.st_mode)) {
-            // Es un archivo regular, almacenar información
-            
-            // Verificar si necesitamos expandir el array
-            if (snapshot->file_count >= snapshot->capacity) {
-                snapshot->capacity *= 2;
-                snapshot->files = realloc(snapshot->files, 
-                                        snapshot->capacity * sizeof(FileInfo*));
-            }
-            
-            // Crear nueva entrada de archivo
-            FileInfo *file_info = malloc(sizeof(FileInfo));
-            
-            // Almacenar información básica
-            file_info->path = strdup(full_path);
-            file_info->name = strdup(entry->d_name);
-            file_info->extension = get_file_extension(entry->d_name);
-            file_info->size = file_stat.st_size;
-            file_info->permissions = file_stat.st_mode;
-            file_info->last_modified = file_stat.st_mtime;
-            file_info->last_accessed = file_stat.st_atime;
-            
-            // Calcular hash SHA-256
-            if (calculate_sha256(full_path, file_info->sha256_hash) != 0) {
-                strcpy(file_info->sha256_hash, "ERROR_CALCULATING_HASH");
-            }
-            
-            // Agregar a la lista
-            snapshot->files[snapshot->file_count] = file_info;
-            snapshot->file_count++;
-            
-            printf("Archivo escaneado: %s (Tamaño: %ld bytes, Hash: %.16s...)\n", 
-                   entry->d_name, file_stat.st_size, file_info->sha256_hash);
-        }
-    }
+    // Guardar informe en archivo
+    char filename[256];
+    snprintf(filename, sizeof(filename), "port_scan_report_%d-%d.txt", 
+             start_port, end_port);
+    save_scan_report(&result, filename);
     
-    closedir(dir);
+    // Liberar memoria
+    free(result.ports);
+    
     return 0;
 }
 
 /**
- * Crea un snapshot completo de un dispositivo
+ * Escanea puertos comunes (1-1024) con análisis de seguridad
  * 
- * @param device_name: Nombre del dispositivo
- * @return DeviceSnapshot*: Puntero al snapshot creado
+ * @return int: 0 si es exitoso, -1 si hay error
  */
-DeviceSnapshot* create_device_snapshot(const char *device_name) {
-    DeviceSnapshot *snapshot = malloc(sizeof(DeviceSnapshot));
-    snapshot->device_name = strdup(device_name);
-    snapshot->files = malloc(100 * sizeof(FileInfo*)); // Capacidad inicial
-    snapshot->file_count = 0;
-    snapshot->capacity = 100;
-    snapshot->snapshot_time = time(NULL);
-    
-    // Construir la ruta del dispositivo
-    char device_path[512];
-    snprintf(device_path, sizeof(device_path), "/media/%s", device_name);
-    
-    printf("Creando snapshot del dispositivo: %s\n", device_name);
-    printf("Escaneando directorio: %s\n", device_path);
-    
-    // Escanear el dispositivo
-    if (scan_directory_recursive(snapshot, device_path) != 0) {
-        printf("Error al escanear el dispositivo %s\n", device_name);
-    }
-    
-    printf("Snapshot completado: %d archivos encontrados\n", snapshot->file_count);
-    printf("---\n");
-    
-    return snapshot;
+int scan_common_ports(void) {
+    printf("Iniciando escaneo de puertos comunes (1-1024)...\n");
+    return scan_ports(1, 1024);
 }
 
 /**
- * Libera la memoria de un snapshot de dispositivo
+ * Escanea un puerto específico y muestra información detallada
  * 
- * @param snapshot: Puntero al snapshot a liberar
+ * @param port: Puerto a escanear (1-65535)
+ * @return int: 1 si está abierto, 0 si está cerrado, -1 si hay error
  */
-void free_device_snapshot(DeviceSnapshot *snapshot) {
-    if (snapshot != NULL) {
-        // Liberar información de cada archivo
-        for (int i = 0; i < snapshot->file_count; i++) {
-            FileInfo *file = snapshot->files[i];
-            free(file->path);
-            free(file->name);
-            free(file->extension);
-            free(file);
+int scan_specific_port(int port) {
+    if (port < 1 || port > 65535) {
+        printf("Error: Puerto inválido (%d). Debe estar entre 1 y 65535.\n", port);
+        return -1;
+    }
+    
+    printf("Escaneando puerto %d...\n", port);
+    
+    int is_open = scan_single_port(port);
+    
+    if (is_open) {
+        char service_name[64];
+        get_service_name(port, service_name, sizeof(service_name));
+        int suspicious = is_port_suspicious(port, service_name);
+        
+        printf("Puerto %d/tcp: ABIERTO\n", port);
+        printf("Servicio: %s\n", service_name);
+        
+        if (suspicious) {
+            printf("Estado: SOSPECHOSO - Se recomienda investigar\n");
+        } else {
+            printf("Estado: NORMAL - Servicio esperado\n");
         }
         
-        // Liberar arrays y estructura
-        free(snapshot->files);
-        free(snapshot->device_name);
-        free(snapshot);
+        return 1;
+    } else {
+        printf("Puerto %d/tcp: CERRADO\n", port);
+        return 0;
     }
+}
+
+// ============================================================================
+// FUNCIONES AUXILIARES
+// ============================================================================
+
+/**
+ * Obtiene el timestamp actual en formato legible
+ * 
+ * @return const char*: String con fecha y hora actual
+ */
+const char* get_current_timestamp(void) {
+    static char timestamp[64];
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S\n", tm_info);
+    return timestamp;
 }
