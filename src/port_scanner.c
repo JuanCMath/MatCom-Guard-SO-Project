@@ -122,25 +122,45 @@ int calculate_sha256(const char *filepath, char *hash_output) {
         return -1;
     }
     
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
+    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+    if (!mdctx) {
+        fclose(file);
+        return -1;
+    }
+    
+    if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1) {
+        EVP_MD_CTX_free(mdctx);
+        fclose(file);
+        return -1;
+    }
     
     unsigned char buffer[8192];
     size_t bytes_read;
     
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        SHA256_Update(&sha256, buffer, bytes_read);
+        if (EVP_DigestUpdate(mdctx, buffer, bytes_read) != 1) {
+            EVP_MD_CTX_free(mdctx);
+            fclose(file);
+            return -1;
+        }
     }
     
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_Final(hash, &sha256);
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len;
+    
+    if (EVP_DigestFinal_ex(mdctx, hash, &hash_len) != 1) {
+        EVP_MD_CTX_free(mdctx);
+        fclose(file);
+        return -1;
+    }
     
     // Convertir a string hexadecimal
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+    for (unsigned int i = 0; i < hash_len; i++) {
         sprintf(hash_output + (i * 2), "%02x", hash[i]);
     }
-    hash_output[64] = '\0';
+    hash_output[hash_len * 2] = '\0';
     
+    EVP_MD_CTX_free(mdctx);
     fclose(file);
     return 0;
 }

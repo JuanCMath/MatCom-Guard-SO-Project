@@ -7,7 +7,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <openssl/sha.h>
+#include <openssl/evp.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <time.h>
