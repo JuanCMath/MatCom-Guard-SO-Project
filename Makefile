@@ -8,7 +8,6 @@ SRC = src/main.c \
 		src/port_scanner.c \
 		src/process_monitor.c \
 		src/device_monitor.c \
-		src/auxiliar_methods.c \
 		src/gui/gui_main.c \
 		src/gui/window/gui_logging.c \
 		src/gui/window/gui_stats.c \
