@@ -561,7 +561,7 @@ void gui_export_report_to_pdf(const char *filename) {
             return;
         }
         
-        // MEJORA: Usar buffers estáticos en lugar de malloc para mayor estabilidad
+        // Usar buffers estáticos en lugar de malloc para mayor estabilidad
         // Tamaños calculados para manejar logs grandes sin problemas de memoria
         char filtered_stats[4096];   // Buffer para estadísticas filtradas
         char filtered_log[32768];    // Buffer para log filtrado (32KB)
@@ -582,7 +582,7 @@ void gui_export_report_to_pdf(const char *filename) {
         // ================================================================
         // EXPORTACIÓN PDF AVANZADA CON CAIRO
         // ================================================================
-        // MEJORA MAYOR: Implementación completamente rediseñada para
+        // Implementación completamente rediseñada para
         // solucionar todos los problemas reportados por el usuario
         
         // Crear superficie PDF con dimensiones A4 estándar (595x842 puntos)
@@ -604,7 +604,7 @@ void gui_export_report_to_pdf(const char *filename) {
         // ================================================================
         // CONFIGURACIÓN DE FUENTE Y ESTILO
         // ================================================================
-        // MEJORA: Usar fuente monospace para mejor legibilidad y cálculos precisos
+        // Usar fuente monospace para mejor legibilidad y cálculos precisos
         // DejaVu Sans Mono es una fuente estándar disponible en la mayoría de sistemas
         cairo_select_font_face(cr, "DejaVu Sans Mono", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 10);  // Tamaño legible pero compacto
@@ -613,7 +613,7 @@ void gui_export_report_to_pdf(const char *filename) {
         // ================================================================
         // VARIABLES DE PAGINACIÓN MEJORADAS
         // ================================================================
-        // MEJORA CRÍTICA: Parámetros calculados para optimizar el uso del espacio
+        // Parámetros calculados para optimizar el uso del espacio
         double x = 50, y = 50;              // Márgenes izquierdo y superior
         double line_height = 12;             // Espacio entre líneas (ajustado para fuente 10pt)
         double page_height = 792;            // Altura total de página A4 en puntos
@@ -626,14 +626,15 @@ void gui_export_report_to_pdf(const char *filename) {
         // ================================================================
         cairo_set_font_size(cr, 16);  // Fuente más grande para título
         cairo_move_to(cr, x, y);
-        cairo_show_text(cr, "REPORTE DE SEGURIDAD MATCOM GUARD");        y += line_height * 2;  // Espacio extra después del título
+        cairo_show_text(cr, "REPORTE DE SEGURIDAD MATCOM GUARD");
+        y += line_height * 2;
         
         cairo_set_font_size(cr, 10);  // Restaurar tamaño normal para contenido
         
         // ================================================================
         // PROCESAMIENTO DE TEXTO AVANZADO
         // ================================================================
-        // MEJORA PRINCIPAL: Filtrado de caracteres especiales y emojis
+        // Filtrado de caracteres especiales y emojis
         // Esto resuelve el problema reportado de emojis que causaban errores en PDFs
         
         char filtered_stats[4096];   // Buffer para estadísticas filtradas
@@ -656,7 +657,7 @@ void gui_export_report_to_pdf(const char *filename) {
         // ================================================================
         // ESCRITURA DE ESTADÍSTICAS CON PAGINACIÓN AUTOMÁTICA
         // ================================================================
-        // MEJORA: Control preciso de paginación para evitar cortes abruptos
+        // Control preciso de paginación para evitar cortes abruptos
         
         char *stats_copy = strdup(wrapped_stats);  // Copia para strtok (modifica original)
         char *stats_line = strtok(stats_copy, "\n");
@@ -690,7 +691,7 @@ void gui_export_report_to_pdf(const char *filename) {
         // ================================================================
         // PROCESAMIENTO AVANZADO DEL LOG
         // ================================================================
-        // MEJORA CRÍTICA: El log puede contener líneas extremadamente largas
+        // El log puede contener líneas extremadamente largas
         // que necesitan ser divididas inteligentemente para evitar pérdida
         // de información (problema principal reportado por el usuario)
         
@@ -700,7 +701,7 @@ void gui_export_report_to_pdf(const char *filename) {
         // ================================================================
         // ESCRITURA DEL LOG CON CONTROL DE PAGINACIÓN
         // ================================================================
-        // SOLUCIÓN: Escritura línea por línea con verificación automática
+        // Escritura línea por línea con verificación automática
         // de límites de página para asegurar que todo el contenido se incluya
         
         char *log_copy = strdup(wrapped_log);  // Copia para preservar original
@@ -742,7 +743,7 @@ void gui_export_report_to_pdf(const char *filename) {
 }
 
 // ============================================================================
-// FUNCIONES AUXILIARES PARA EXPORTACIÓN AVANZADA
+// FUNCIONES AUXILIARES PARA EXPORTACIÓN
 // ============================================================================
 
 /**
@@ -872,7 +873,7 @@ void write_wrapped_text(cairo_t *cr, const char* text, double *x, double *y,
 }
 
 // ============================================================================
-// FUNCIONES AUXILIARES OPTIMIZADAS PARA EXPORTACIÓN (v2.0)
+// UTILIDADES DE FORMATEO DE TEXTO PARA PDF
 // ============================================================================
 
 /**
@@ -888,11 +889,7 @@ void write_wrapped_text(cairo_t *cr, const char* text, double *x, double *y,
  * - Preserva saltos de línea (\n) y tabulaciones (\t) importantes
  * - Convierte caracteres acentuados comunes (á, é, í, ó, ú, ñ) a ASCII
  * - Ignora completamente emojis y otros caracteres UTF-8 complejos
- * 
- * MEJORAS SOBRE LA VERSIÓN ANTERIOR:
  * - Usa buffers estáticos en lugar de malloc (más estable)
- * - Mejor manejo de caracteres UTF-8 multi-byte
- * - Conversión inteligente de acentos a equivalentes ASCII
  * - Control de límites mejorado para evitar buffer overflow
  * 
  * @param input Texto original que puede contener emojis/caracteres especiales
@@ -1151,63 +1148,5 @@ int count_wrapped_lines(const char *text, int max_width) {    if (!text || max_w
     }
       return line_count;
 }
-
-// ============================================================================
-// RESUMEN DE MEJORAS IMPLEMENTADAS EN EXPORTACIÓN v2.0
-// ============================================================================
-
-/*
- * DOCUMENTACIÓN FINAL - SISTEMA DE EXPORTACIÓN MEJORADO
- * ========================================================
- * 
- * PROBLEMAS ORIGINALES REPORTADOS POR EL USUARIO:
- * ------------------------------------------------
- * 1. ❌ Líneas largas se cortaban y perdían información en PDFs
- * 2. ❌ Emojis causaban errores en generación de PDFs  
- * 3. ❌ Formato inconsistente entre PDF y TXT
- * 4. ❌ Paginación deficiente con pérdida de contenido
- * 5. ❌ Caracteres acentuados problemáticos
- * 
- * SOLUCIONES IMPLEMENTADAS:
- * -------------------------
- * 1. ✅ filter_emoji_and_special_chars(): Filtra automáticamente emojis y 
- *       convierte acentos a ASCII para compatibilidad total
- * 
- * 2. ✅ wrap_text_for_pdf(): División inteligente de líneas largas con
- *       algoritmo que respeta palabras completas y preserva información
- * 
- * 3. ✅ count_wrapped_lines(): Cálculo preciso de líneas para paginación
- *       automática que evita cortes abruptos de contenido
- * 
- * 4. ✅ gui_export_report_to_pdf(): Función principal completamente 
- *       rediseñada con:
- *       - Buffers estáticos para mayor estabilidad
- *       - Control automático de paginación  
- *       - Formato consistente entre PDF y TXT
- *       - Validación robusta de errores
- *       - Documentación exhaustiva de cada paso
- * 
- * CARACTERÍSTICAS TÉCNICAS:
- * -------------------------
- * - Compatibilidad: PDF y TXT usan el mismo filtrado para consistencia
- * - Rendimiento: Algoritmos optimizados con complejidad O(n) 
- * - Memoria: Uso de buffers estáticos en lugar de malloc dinámico
- * - Robustez: Validación exhaustiva de parámetros y control de límites
- * - Mantenibilidad: Código completamente documentado y modular
- * 
- * PRUEBAS REALIZADAS:
- * -------------------
- * ✅ Exportación de logs con líneas >1000 caracteres
- * ✅ Texto con emojis variados (🔥👋😊🚀📊💻)
- * ✅ Caracteres acentuados (áéíóúñ ÁÉÍÓÚÑ)
- * ✅ Logs grandes >50KB con paginación automática
- * ✅ Comparación formato PDF vs TXT (consistencia)
- * ✅ Casos edge: texto vacío, solo emojis, líneas extremas
- * 
- * VERSIÓN: 2.0 - Sistema de Exportación Avanzado
- * FECHA: 2025-06-23
- * AUTOR: MatCom Guard Team  
- * ESTADO: ✅ COMPLETADO Y PROBADO
- */
 
 // ============================================================================

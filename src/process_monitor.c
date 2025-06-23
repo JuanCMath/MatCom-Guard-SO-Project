@@ -98,7 +98,9 @@ void load_config(void) {
             list[strcspn(list, "\n")] = 0;
             
             // Tokenizar la lista de procesos
-            char *token = strtok(list, ",");            while (token) {
+            char *token = strtok(list, ",");            
+            
+            while (token) {
                 // Usar temp pointer para evitar perder referencia en caso de fallo de realloc
                 char **temp_list = realloc(config.white_list, 
                                           (config.num_white_processes + 1) * sizeof(char*));

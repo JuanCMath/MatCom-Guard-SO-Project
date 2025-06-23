@@ -415,12 +415,13 @@ void init_gui(int argc, char **argv) {
     // ========================================================================
     // INTEGRACIÓN COMPLETA DEL SISTEMA BACKEND
     // ========================================================================
-      // Configurar TODOS los callbacks con el sistema integrado completo
+    
+    // Configurar TODOS los callbacks con el sistema integrado completo
     gui_set_scan_callbacks(
         gui_compatible_scan_usb,        // USB totalmente integrado
         gui_compatible_scan_processes,  // Procesos totalmente integrado
         gui_compatible_scan_ports,      // Puertos totalmente integrado
-        gui_export_report_to_pdf        // Export callback - funcionalidad completa implementada
+        gui_export_report_to_pdf        // Export callback
     );
     
     gtk_widget_show_all(main_window);
