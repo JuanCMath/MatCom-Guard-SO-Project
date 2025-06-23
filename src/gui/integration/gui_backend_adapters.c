@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 
 // ============================================================================
 // CACHE DE SNAPSHOTS USB
@@ -54,16 +55,51 @@ int adapt_process_info_to_gui(const ProcessInfo *backend_info, GUIProcess *gui_p
 int adapt_device_snapshot_to_gui(const DeviceSnapshot *snapshot, 
                                  const DeviceSnapshot *previous_snapshot,
                                  GUIUSBDevice *gui_device) {
+    printf("DEBUG: Entrando a adapt_device_snapshot_to_gui\n");
+    printf("DEBUG: snapshot=%p, gui_device=%p\n", (void*)snapshot, (void*)gui_device);
+    
     if (!snapshot || !gui_device) {
+        fprintf(stderr, "Error: snapshot o gui_device es NULL\n");
         return -1;
     }
+    
+    printf("DEBUG: snapshot->device_name=%p\n", (void*)snapshot->device_name);
     
     // Inicializar estructura GUI
     memset(gui_device, 0, sizeof(GUIUSBDevice));
     
-    // Copiar nombre del dispositivo
-    strncpy(gui_device->device_name, snapshot->device_name, 
-            sizeof(gui_device->device_name) - 1);
+    // Validar que device_name no sea NULL antes de usarlo
+    if (!snapshot->device_name) {
+        fprintf(stderr, "Error: snapshot->device_name es NULL\n");
+        return -1;
+    }
+    
+    // Validar que la dirección de memory esté en un rango razonable
+    uintptr_t addr = (uintptr_t)snapshot->device_name;
+    if (addr < 0x1000 || addr > 0x7fffffffffff) {
+        fprintf(stderr, "Error: snapshot->device_name tiene dirección sospechosa: %p\n", 
+                (void*)snapshot->device_name);
+        return -1;
+    }
+    
+    // Intentar acceder al primer byte de forma segura
+    char first_char;
+    __builtin_memcpy(&first_char, snapshot->device_name, 1);
+    
+    // Validar que device_name sea una cadena válida (máximo 255 caracteres)
+    size_t name_len = strnlen(snapshot->device_name, 256);
+    if (name_len >= 256) {
+        fprintf(stderr, "Error: snapshot->device_name demasiado largo o inválido\n");
+        return -1;
+    }
+    
+    printf("Device name: %s (length: %zu)\n", snapshot->device_name, name_len);
+    
+    // Copiar nombre del dispositivo de forma segura
+    strncpy(gui_device->device_name, snapshot->device_name, sizeof(gui_device->device_name)-1);
+    gui_device->device_name[sizeof(gui_device->device_name)-1] = '\0'; // Asegurar terminación
+
+    printf("GUI device name: %s\n", gui_device->device_name);
     
     // Generar punto de montaje basado en el nombre del dispositivo
     snprintf(gui_device->mount_point, sizeof(gui_device->mount_point),

@@ -252,9 +252,32 @@ int scan_directory_recursive(DeviceSnapshot *snapshot, const char *dir_path) {
  * @return DeviceSnapshot*: Puntero al snapshot creado
  */
 DeviceSnapshot* create_device_snapshot(const char *device_name) {
+    if (!device_name) {
+        printf("Error: device_name es NULL\n");
+        return NULL;
+    }
+    
     DeviceSnapshot *snapshot = malloc(sizeof(DeviceSnapshot));
+    if (!snapshot) {
+        printf("Error: No se pudo asignar memoria para snapshot\n");
+        return NULL;
+    }
+    
     snapshot->device_name = strdup(device_name);
+    if (!snapshot->device_name) {
+        printf("Error: No se pudo asignar memoria para device_name\n");
+        free(snapshot);
+        return NULL;
+    }
+    
     snapshot->files = malloc(100 * sizeof(FileInfo*)); // Capacidad inicial
+    if (!snapshot->files) {
+        printf("Error: No se pudo asignar memoria para files array\n");
+        free(snapshot->device_name);
+        free(snapshot);
+        return NULL;
+    }
+    
     snapshot->file_count = 0;
     snapshot->capacity = 100;
     snapshot->snapshot_time = time(NULL);

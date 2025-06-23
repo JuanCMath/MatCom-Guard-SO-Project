@@ -346,8 +346,7 @@ int analyze_usb_device(const char *device_name) {
     snprintf(log_msg, sizeof(log_msg), 
              "Creando snapshot del dispositivo: %s", device_name);
     gui_add_log_entry("USB_ANALYZER", "INFO", log_msg);
-    
-    // Paso 1: Crear un snapshot completo del dispositivo actual
+      // Paso 1: Crear un snapshot completo del dispositivo actual
     // Esta operación puede tomar tiempo ya que calcula hashes SHA-256 de todos los archivos
     DeviceSnapshot* new_snapshot = create_device_snapshot(device_name);
     if (!new_snapshot) {
@@ -357,10 +356,18 @@ int analyze_usb_device(const char *device_name) {
         return -1;
     }
     
+    // Debug: Verificar el estado del snapshot recién creado
+    printf("DEBUG: Snapshot creado exitosamente para %s\n", device_name);
+    printf("DEBUG: new_snapshot=%p, device_name=%p\n", new_snapshot, new_snapshot->device_name);
+    if (new_snapshot->device_name) {
+        printf("DEBUG: device_name content: '%s'\n", new_snapshot->device_name);
+    }
+    
     // Paso 2: Recuperar el snapshot anterior del cache para comparación
     DeviceSnapshot* previous_snapshot = get_cached_usb_snapshot(device_name);
     
     // Paso 3: Convertir los datos del backend al formato que entiende la GUI
+    printf("DEBUG: Llamando a adapt_device_snapshot_to_gui...\n");
     GUIUSBDevice gui_device;
     if (adapt_device_snapshot_to_gui(new_snapshot, previous_snapshot, &gui_device) != 0) {
         gui_add_log_entry("USB_ANALYZER", "ERROR", 
