@@ -9,8 +9,8 @@
 #include <sys/sysinfo.h>
 #include "process_monitor.h"
 
+// ===== VARIABLES GLOBALES =====
 
-// Variables globales
 Config config;
 ProcessInfo *procesos = NULL;
 int num_procesos = 0;
@@ -21,10 +21,6 @@ FILE *log_file = NULL;
 ActiveProcess *procesos_activos = NULL;
 int num_procesos_activos = 0;
 
-#define MAX_CPU_USAGE config.max_cpu_usage  // Umbral para alertas de CPU
-#define MAX_MEM_USAGE config.max_ram_usage // Umbral para alertas de memoria
-
-
 // Variables para control de hilos de monitoreo
 static pthread_t monitoring_thread;
 static volatile int monitoring_active = 0;
@@ -33,10 +29,35 @@ static volatile int should_stop = 0;
 // Callbacks opcionales para eventos
 static ProcessCallbacks *event_callbacks = NULL;
 
+// ===== DECLARACIONES DE FUNCIONES PRIVADAS =====
 
-// Función para cargar la configuración
-void load_config() {
+// Funciones de acceso a /proc
+static int read_proc_stat(pid_t pid, ProcStat *stat);
+static unsigned long get_total_system_memory(void);
 
+// Funciones de persistencia
+static void get_stat_file_path(pid_t pid, char *path, size_t size);
+static void read_prev_times(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time);
+static void write_prev_times(pid_t pid, unsigned long prev_user_time, unsigned long prev_sys_time);
+
+// Funciones de gestión de procesos internos
+static int find_process(pid_t pid);
+static void add_process(ProcessInfo info);
+static void remove_process(pid_t pid);
+static void update_process(ProcessInfo info, int idx);
+static void clear_process_list(void);
+static void show_process_stats(void);
+
+// Funciones de alertas
+static void check_and_update_alert_status(ProcessInfo *info);
+static void clear_alert_if_needed(ProcessInfo *info);
+
+// Función del hilo de monitoreo
+static void* monitoring_thread_function(void* arg);
+
+// ===== FUNCIONES DE CONFIGURACIÓN =====
+
+void load_config(void) {
     // Valores predeterminados
     config.max_cpu_usage = 90.0;
     config.max_ram_usage = 80.0;
@@ -47,32 +68,30 @@ void load_config() {
 
     // Cargar desde archivo
     FILE *conf = fopen(CONFIG_PATH, "r");
-    if (!conf) return;
+    if (!conf) {
+        printf("[INFO] No se encontró archivo de configuración, usando valores predeterminados\n");
+        return;
+    }
 
     char line[256];
     while (fgets(line, sizeof(line), conf)) {
-
-        //Actualiza el umbral para alertas de uso de CPU
+        // Actualiza el umbral para alertas de uso de CPU
         if (strstr(line, "UMBRAL_CPU=")) {
             sscanf(line, "UMBRAL_CPU=%f", &config.max_cpu_usage);
         } 
-
-        //Actualiza el umbral para alertas de uso de RAM
+        // Actualiza el umbral para alertas de uso de RAM
         else if (strstr(line, "UMBRAL_RAM=")) {
             sscanf(line, "UMBRAL_RAM=%f", &config.max_ram_usage);
         } 
-
-        //Actualiza el intervalo de realizacion de chequeos
+        // Actualiza el intervalo de realización de chequeos
         else if (strstr(line, "INTERVALO=")) {
             sscanf(line, "INTERVALO=%d", &config.check_interval);
         } 
-
-        //Actualiza la duracion del estado de alerta
+        // Actualiza la duración del estado de alerta
         else if (strstr(line, "DURACION_ALERTA=")) {
             sscanf(line, "DURACION_ALERTA=%d", &config.alert_duration);
         } 
-
-        //Actualiza lo procesos a tener en cuenta en la lista blanca
+        // Actualiza los procesos a tener en cuenta en la lista blanca
         else if (strstr(line, "WHITELIST=")) {
             char *list = strchr(line, '=') + 1;
             list[strcspn(list, "\n")] = 0;
@@ -82,18 +101,21 @@ void load_config() {
             while (token) {
                 config.white_list = realloc(config.white_list, 
                                             (config.num_white_processes + 1) * sizeof(char*));
-                config.white_list[config.num_white_processes] = strdup(token);
-                config.num_white_processes++;
+                if (config.white_list) {
+                    config.white_list[config.num_white_processes] = strdup(token);
+                    config.num_white_processes++;
+                }
                 token = strtok(NULL, ",");
             }
         }
     }
 
     fclose(conf);
+    printf("[INFO] Configuración cargada: CPU=%.1f%%, RAM=%.1f%%, Intervalo=%ds, Duración alerta=%ds\n",
+           config.max_cpu_usage, config.max_ram_usage, config.check_interval, config.alert_duration);
 }
 
-
-// ===== FUNCIÓN PRINCIPAL PARA OBTENER INFORMACIÓN DE PROCESO =====
+// ===== FUNCIONES DE INFORMACIÓN DE PROCESOS =====
 
 ProcessInfo* get_process_info(pid_t pid) {
     // Verificar que el proceso existe
@@ -123,7 +145,7 @@ ProcessInfo* get_process_info(pid_t pid) {
     // Verificar si está en whitelist
     info->is_whitelisted = is_process_whitelisted(info->name);
     
-    // Obtener uso de CPU usando función existente
+    // Obtener uso de CPU
     info->cpu_usage = interval_cpu_usage(pid);
     
     // Obtener uso de memoria
@@ -134,14 +156,79 @@ ProcessInfo* get_process_info(pid_t pid) {
     info->inicio_alerta = 0;
     info->exceeds_thresholds = 0;
     info->first_threshold_exceed = 0;
-    info->cpu_time = 0.0; // Por ahora, se puede implementar después
+    info->cpu_time = 0.0;
     
     return info;
 }
 
+int process_exists(pid_t pid) {
+    char stat_path[256];
+    sprintf(stat_path, "/proc/%d/stat", pid);
+    FILE *fp = fopen(stat_path, "r");
+    if (fp) {
+        fclose(fp);
+        return 1;
+    }
+    return 0;
+}
 
-// Función para monitorear procesos
-void monitor_processes() {
+void get_process_name(pid_t pid, char *name, size_t size) {
+    // Intentar primero /proc/[pid]/comm (más confiable)
+    char comm_path[256];
+    sprintf(comm_path, "/proc/%d/comm", pid);
+    FILE *fp = fopen(comm_path, "r");
+    
+    if (fp) {
+        if (fgets(name, size, fp)) {
+            // Remover \n al final
+            name[strcspn(name, "\n")] = '\0';
+            fclose(fp);
+            return;
+        }
+        fclose(fp);
+    }
+    
+    // Si comm falla, intentar desde /proc/[pid]/stat
+    char stat_path[256];
+    sprintf(stat_path, "/proc/%d/stat", pid);
+    fp = fopen(stat_path, "r");
+    
+    if (fp) {
+        char comm_field[256];
+        if (fscanf(fp, "%*d %255s", comm_field) == 1) {
+            // Remover paréntesis del nombre
+            if (comm_field[0] == '(' && comm_field[strlen(comm_field)-1] == ')') {
+                comm_field[strlen(comm_field)-1] = '\0';
+                strncpy(name, comm_field + 1, size - 1);
+                name[size - 1] = '\0';
+            } else {
+                strncpy(name, comm_field, size - 1);
+                name[size - 1] = '\0';
+            }
+            fclose(fp);
+            return;
+        }
+        fclose(fp);
+    }
+    
+    // Si todo falla, nombre por defecto
+    snprintf(name, size, "unknown_%d", pid);
+}
+
+int is_process_whitelisted(const char *process_name) {
+    if (!process_name || !config.white_list) return 0;
+    
+    for (int i = 0; i < config.num_white_processes; i++) {
+        if (config.white_list[i] && strcmp(process_name, config.white_list[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// ===== FUNCIONES DE MONITOREO PRINCIPAL =====
+
+void monitor_processes(void) {
     DIR *dir = opendir("/proc");
     if (!dir) {
         perror("Error al abrir /proc");
@@ -164,7 +251,7 @@ void monitor_processes() {
         if (*endptr == '\0') {
             pid_t pid = (pid_t)lpid;
 
-              // Obtener información del proceso
+            // Obtener información del proceso
             ProcessInfo *info_ptr = get_process_info(pid);
             if (!info_ptr || strlen(info_ptr->name) == 0) {
                 if (info_ptr) free(info_ptr);
@@ -178,7 +265,8 @@ void monitor_processes() {
                 // Callback para proceso nuevo
                 if (event_callbacks && event_callbacks->on_new_process) {
                     event_callbacks->on_new_process(info_ptr);
-                }            } else {
+                }
+            } else {
                 // Proceso existente - actualizar información y verificar alertas
                 ProcessInfo *existing = &procesos_activos[idx].info;
                 
@@ -202,7 +290,7 @@ void monitor_processes() {
             }
             
             // Verificar si el proceso excede umbrales y generar alertas con callbacks
-            if (info_ptr->cpu_usage > MAX_CPU_USAGE) {
+            if (info_ptr->cpu_usage > config.max_cpu_usage) {
                 printf("[ALERTA CPU] PID: %d, Nombre: %s, CPU: %.2f%%\n",
                        pid, info_ptr->name, info_ptr->cpu_usage);
                 if (event_callbacks && event_callbacks->on_high_cpu_alert) {
@@ -210,7 +298,7 @@ void monitor_processes() {
                 }
             }
             
-            if (info_ptr->mem_usage > MAX_MEM_USAGE) {
+            if (info_ptr->mem_usage > config.max_ram_usage) {
                 printf("[ALERTA MEM] PID: %d, Nombre: %s, Mem: %.2f%%\n",
                        pid, info_ptr->name, info_ptr->mem_usage);
                 if (event_callbacks && event_callbacks->on_high_memory_alert) {
@@ -244,16 +332,15 @@ void monitor_processes() {
     show_process_stats();
 }
 
-// ===== FUNCIONES DE MANEJO DE HILOS PARA MONITOREO =====
-// Función para establecer callbacks de eventos
+// ===== FUNCIONES DE CONTROL DE HILOS =====
+
 void set_process_callbacks(ProcessCallbacks *callbacks) {
     pthread_mutex_lock(&mutex);
     event_callbacks = callbacks;
     pthread_mutex_unlock(&mutex);
 }
 
-// Función del hilo de monitoreo
-void* monitoring_thread_function(void* arg) {
+static void* monitoring_thread_function(void* arg) {
     (void)arg; // Evitar warning de parámetro no usado
     
     while (!should_stop) {
@@ -273,8 +360,7 @@ void* monitoring_thread_function(void* arg) {
     return NULL;
 }
 
-// Iniciar el monitoreo en hilo separado
-int start_monitoring() {
+int start_monitoring(void) {
     pthread_mutex_lock(&mutex);
     
     if (monitoring_active) {
@@ -299,8 +385,7 @@ int start_monitoring() {
     return 0;
 }
 
-// Detener el monitoreo
-int stop_monitoring() {
+int stop_monitoring(void) {
     pthread_mutex_lock(&mutex);
     
     if (!monitoring_active) {
@@ -323,15 +408,13 @@ int stop_monitoring() {
     return 0;
 }
 
-// Verificar si el monitoreo está activo
-int is_monitoring_active() {
+int is_monitoring_active(void) {
     pthread_mutex_lock(&mutex);
     int active = monitoring_active;
     pthread_mutex_unlock(&mutex);
     return active;
 }
 
-// Cambiar intervalo de monitoreo dinámicamente
 void set_monitoring_interval(int seconds) {
     if (seconds < 1) seconds = 1;
     if (seconds > 3600) seconds = 3600; // Max 1 hora
@@ -343,8 +426,7 @@ void set_monitoring_interval(int seconds) {
     printf("[INFO] Intervalo de monitoreo cambiado a %d segundos\n", seconds);
 }
 
-// Obtener estadísticas thread-safe
-MonitoringStats get_monitoring_stats() {
+MonitoringStats get_monitoring_stats(void) {
     MonitoringStats stats = {0};
     
     pthread_mutex_lock(&mutex);
@@ -366,7 +448,6 @@ MonitoringStats get_monitoring_stats() {
     return stats;
 }
 
-// Obtener copia thread-safe de la lista de procesos
 ProcessInfo* get_process_list_copy(int *count) {
     pthread_mutex_lock(&mutex);
     
@@ -387,8 +468,7 @@ ProcessInfo* get_process_list_copy(int *count) {
     return copy;
 }
 
-// Limpiar recursos al finalizar
-void cleanup_monitoring() {
+void cleanup_monitoring(void) {
     stop_monitoring();
     
     pthread_mutex_lock(&mutex);
@@ -396,7 +476,7 @@ void cleanup_monitoring() {
     event_callbacks = NULL;
     pthread_mutex_unlock(&mutex);
     
-    // Limpiar archivos temporales corruptos
+    // Limpiar archivos temporales
     cleanup_stale_temp_files();
     cleanup_temp_files();
     
@@ -404,22 +484,9 @@ void cleanup_monitoring() {
     printf("[INFO] Recursos de monitoreo liberados\n");
 }
 
-// ===== FUNCIONES PARA MANEJO DE WHITELIST Y ALERTAS CON DURACIÓN =====
+// ===== FUNCIONES DE ALERTAS =====
 
-// Verificar si un proceso está en la whitelist
-int is_process_whitelisted(const char *process_name) {
-    if (!process_name || !config.white_list) return 0;
-    
-    for (int i = 0; i < config.num_white_processes; i++) {
-        if (config.white_list[i] && strcmp(process_name, config.white_list[i]) == 0) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-// Verificar y actualizar estado de alerta según RF2
-void check_and_update_alert_status(ProcessInfo *info) {
+static void check_and_update_alert_status(ProcessInfo *info) {
     if (!info) return;
     
     // Si está en whitelist, no generar alertas
@@ -469,8 +536,7 @@ void check_and_update_alert_status(ProcessInfo *info) {
     }
 }
 
-// Limpiar alerta si el proceso volvió a valores normales
-void clear_alert_if_needed(ProcessInfo *info) {
+static void clear_alert_if_needed(ProcessInfo *info) {
     if (!info) return;
     
     if (info->exceeds_thresholds || info->alerta_activa) {
@@ -491,5 +557,285 @@ void clear_alert_if_needed(ProcessInfo *info) {
                 event_callbacks->on_alert_cleared(info);
             }
         }
+    }
+}
+
+// ===== FUNCIONES DE ACCESO A /proc =====
+
+static int read_proc_stat(pid_t pid, ProcStat *stat) {
+    char stat_path[256];
+    sprintf(stat_path, "/proc/%d/stat", pid);
+    FILE *fp = fopen(stat_path, "r");
+    if (!fp) return -1;    
+    
+    // Leer los campos 14 (utime), 15 (stime), 22 (starttime)
+    int scanned = fscanf(fp,
+        "%*d "      // pid (campo 1)
+        "%*s "      // comm (campo 2)
+        "%*c "      // state (campo 3)
+        "%*d %*d %*d %*d %*d "  // campos 4-8
+        "%*u %*u %*u %*u %*u "  // campos 9-13
+        "%lu %lu %*ld %*ld %*ld %*ld %*ld %*ld %lu",  // campos 14, 15, 16-21, 22
+        &stat->utime, &stat->stime, &stat->starttime);
+
+    fclose(fp);
+    return (scanned == 3) ? 0 : -1;
+}
+
+static unsigned long get_total_system_memory(void) {
+    FILE *fp = fopen("/proc/meminfo", "r");
+    if (!fp) return 0;
+    
+    char line[256];
+    unsigned long total_mem = 0;
+    
+    while (fgets(line, sizeof(line), fp)) {
+        if (strstr(line, "MemTotal:")) {
+            sscanf(line, "MemTotal: %lu kB", &total_mem);
+            break;
+        }
+    }
+    fclose(fp);
+    return total_mem;
+}
+
+// ===== FUNCIONES DE PERSISTENCIA =====
+
+static void get_stat_file_path(pid_t pid, char *path, size_t size) {
+    snprintf(path, size, "/tmp/procstat_%d.dat", pid);
+}
+
+static void read_prev_times(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time) {
+    char path[64];
+    get_stat_file_path(pid, path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (f) {
+        int scanned = fscanf(f, "%lu %lu", prev_user_time, prev_sys_time);
+        fclose(f);
+        
+        // Si no se pudieron leer ambos valores, inicializar a 0
+        if (scanned != 2) {
+            *prev_user_time = 0;
+            *prev_sys_time = 0;
+        }
+    } else {
+        *prev_user_time = 0;
+        *prev_sys_time = 0;
+    }
+}
+
+static void write_prev_times(pid_t pid, unsigned long prev_user_time, unsigned long prev_sys_time) {
+    char path[64];
+    get_stat_file_path(pid, path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "%lu %lu\n", prev_user_time, prev_sys_time);
+        fclose(f);
+    }
+}
+
+// ===== FUNCIONES DE CÁLCULO DE RECURSOS =====
+
+float total_cpu_usage(pid_t pid) {
+    ProcStat stat;
+    if (read_proc_stat(pid, &stat) != 0) return 0.0;
+    
+    // Obtener uptime del sistema en segundos
+    FILE *uptime_fp = fopen("/proc/uptime", "r");
+    if (!uptime_fp) return 0.0;
+    double system_uptime_seconds = 0.0;
+    fscanf(uptime_fp, "%lf", &system_uptime_seconds);
+    fclose(uptime_fp);
+
+    long clk_tck = sysconf(_SC_CLK_TCK);
+    
+    // Calcular tiempo que el proceso ha estado vivo en segundos
+    double process_start_time_seconds = stat.starttime / (double)clk_tck;
+    double process_uptime_seconds = system_uptime_seconds - process_start_time_seconds;
+    
+    if (process_uptime_seconds <= 0) return 0.0;
+    
+    // Convertir tiempo de CPU usado a segundos
+    double cpu_time_seconds = (stat.utime + stat.stime) / (double)clk_tck;
+    
+    // Calcular porcentaje: (tiempo_cpu_usado / tiempo_vida_proceso) * 100
+    return (float)(100.0 * (cpu_time_seconds / process_uptime_seconds));
+}
+
+float interval_cpu_usage(pid_t pid) {
+    ProcStat stat;
+    if (read_proc_stat(pid, &stat) != 0) return 0.0;
+
+    unsigned long prev_user_time = 0, prev_sys_time = 0;
+    read_prev_times(pid, &prev_user_time, &prev_sys_time);
+
+    // Verificar consistencia de datos (proceso reiniciado, overflow, etc.)
+    if ((prev_user_time == 0 && prev_sys_time == 0) ||
+        (stat.utime < prev_user_time || stat.stime <  prev_sys_time))
+    {
+        write_prev_times(pid, stat.utime, stat.stime);
+        return total_cpu_usage(pid);
+    }    
+    
+    unsigned long delta_user = stat.utime - prev_user_time;
+    unsigned long delta_sys = stat.stime - prev_sys_time;
+    unsigned long delta_total = delta_user + delta_sys;
+    long clk_tck = sysconf(_SC_CLK_TCK);
+
+    // Guardar tiempos actuales para próxima medición
+    write_prev_times(pid, stat.utime, stat.stime);
+
+    // Calcular porcentaje de CPU
+    double cpu_percentage = 100.0 * (delta_total / ((double)clk_tck * config.check_interval));
+    
+    // Detectar valores extremadamente altos que indican problemas de datos
+    long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    double max_theoretical_cpu = num_cores * 100.0;
+    
+    if (cpu_percentage > max_theoretical_cpu) {
+        fprintf(stderr, "[WARNING] PID %d: CPU calculation suspicious: %.2f%% "
+                "(max theoretical: %.2f%% for %ld cores)\n", 
+                pid, cpu_percentage, max_theoretical_cpu, num_cores);
+        return total_cpu_usage(pid);
+    }
+    
+    return (float)cpu_percentage;
+}
+
+float get_process_memory_usage(pid_t pid) {
+    char status_path[256];
+    sprintf(status_path, "/proc/%d/status", pid);
+    FILE *fp = fopen(status_path, "r");
+    if (!fp) return 0.0;
+    
+    char line[256];
+    unsigned long vmrss = 0; // Memoria física usada
+    
+    while (fgets(line, sizeof(line), fp)) {
+        if (strstr(line, "VmRSS:")) {
+            sscanf(line, "VmRSS: %lu kB", &vmrss);
+            break;
+        }
+    }
+    fclose(fp);
+    
+    if (vmrss == 0) return 0.0;
+    
+    unsigned long total_mem = get_total_system_memory();
+    if (total_mem == 0) return 0.0;
+    
+    float mem_percentage = (float)(100.0 * vmrss / total_mem);
+    
+    // Validación: la memoria nunca debería exceder 100%
+    if (mem_percentage > 100.0) {
+        return 100.0;
+    }
+    
+    return mem_percentage;
+}
+
+// ===== FUNCIONES DE GESTIÓN DE PROCESOS =====
+
+static int find_process(pid_t pid) {
+    for (int i = 0; i < num_procesos_activos; i++) {
+        if (procesos_activos[i].info.pid == pid) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void add_process(ProcessInfo info) {
+    procesos_activos = realloc(procesos_activos, 
+                              (num_procesos_activos + 1) * sizeof(ActiveProcess));
+    
+    if (procesos_activos == NULL) {
+        fprintf(stderr, "Error: No se pudo asignar memoria para nuevo proceso\n");
+        return;
+    }
+    
+    procesos_activos[num_procesos_activos].info = info;
+    procesos_activos[num_procesos_activos].encontrado = 1;
+    num_procesos_activos++;
+    
+    printf("[NUEVO PROCESO] PID: %d, Nombre: %s\n", info.pid, info.name);
+}
+
+static void remove_process(pid_t pid) {
+    int idx = find_process(pid);
+    if (idx == -1) return;
+    
+    printf("[PROCESO TERMINADO] PID: %d, Nombre: %s\n", 
+           procesos_activos[idx].info.pid, procesos_activos[idx].info.name);
+    
+    // Mover todos los elementos hacia la izquierda
+    for (int i = idx; i < num_procesos_activos - 1; i++) {
+        procesos_activos[i] = procesos_activos[i + 1];
+    }
+    
+    num_procesos_activos--;
+    
+    if (num_procesos_activos > 0) {
+        procesos_activos = realloc(procesos_activos, 
+                                  num_procesos_activos * sizeof(ActiveProcess));
+    } else {
+        free(procesos_activos);
+        procesos_activos = NULL;
+    }
+}
+
+static void update_process(ProcessInfo info, int idx) {
+    if (idx < 0 || idx >= num_procesos_activos) return;
+    
+    procesos_activos[idx].info = info;
+    procesos_activos[idx].encontrado = 1;
+}
+
+static void clear_process_list(void) {
+    if (procesos_activos != NULL) {
+        free(procesos_activos);
+        procesos_activos = NULL;
+    }
+    num_procesos_activos = 0;
+    printf("[INFO] Lista de procesos activos limpiada\n");
+}
+
+static void show_process_stats(void) {
+    printf("\n=== ESTADÍSTICAS DE PROCESOS ACTIVOS ===\n");
+    printf("Total de procesos monitoreados: %d\n", num_procesos_activos);
+    
+    int alertas_cpu = 0, alertas_mem = 0;
+    for (int i = 0; i < num_procesos_activos; i++) {
+        ProcessInfo *p = &procesos_activos[i].info;
+        if (p->cpu_usage > config.max_cpu_usage) alertas_cpu++;
+        if (p->mem_usage > config.max_ram_usage) alertas_mem++;
+    }
+    
+    printf("Procesos con alta CPU: %d\n", alertas_cpu);
+    printf("Procesos con alta memoria: %d\n", alertas_mem);
+    printf("=========================================\n\n");
+}
+
+// ===== FUNCIONES DE LIMPIEZA =====
+
+void cleanup_temp_files(void) {
+    printf("[INFO] Limpiando archivos temporales de estadísticas...\n");
+    
+    // Eliminar archivos temporales del directorio /tmp
+    int result = system("rm -f /tmp/procstat_*.dat 2>/dev/null");
+    if (result == 0) {
+        printf("[INFO] Archivos temporales limpiados exitosamente\n");
+    } else {
+        printf("[WARNING] No se pudieron limpiar algunos archivos temporales\n");
+    }
+}
+
+void cleanup_stale_temp_files(void) {
+    printf("[INFO] Limpiando archivos temporales antiguos...\n");
+
+    if (system("find /tmp -name 'procstat_*.dat' -mtime +1 -delete 2>/dev/null") == 0) {
+        printf("[INFO] Archivos temporales antiguos limpiados exitosamente\n");
+    } else {
+        printf("[WARNING] No se pudieron limpiar algunos archivos temporales viejos\n");
     }
 }
