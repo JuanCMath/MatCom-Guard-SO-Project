@@ -1,4 +1,4 @@
-#include "../include/device_monitor.h"
+#include <device_monitor.h>
 
 // ============================================================================
 // FUNCIONES DE MONITOREO DE DISPOSITIVOS
@@ -11,7 +11,7 @@
  * @param interval_seconds: Intervalo en segundos entre cada verificación
  * @return DeviceList*: Puntero a estructura con lista de dispositivos conectados
  */
-DeviceList* monitor_connected_devices(int interval_seconds) {
+DeviceList* monitor_connected_devices() {
     // Inicializar la estructura de lista de dispositivos
     DeviceList *device_list = malloc(sizeof(DeviceList));
     device_list->devices = malloc(10 * sizeof(char*)); // Capacidad inicial de 10 dispositivos
@@ -27,8 +27,7 @@ DeviceList* monitor_connected_devices(int interval_seconds) {
     
     printf("Iniciando monitoreo de dispositivos conectados...\n");
     
-    while (1) {
-        // Limpiar la lista anterior de dispositivos
+    // Limpiar la lista anterior de dispositivos
         for (int i = 0; i < device_list->count; i++) {
             free(device_list->devices[i]);
         }
@@ -38,8 +37,7 @@ DeviceList* monitor_connected_devices(int interval_seconds) {
         dir = opendir(mount_dir);
         if (dir == NULL) {
             perror("Error al abrir directorio de montaje");
-            sleep(interval_seconds);
-            continue;
+            return NULL;
         }
         
         // Leer todas las entradas del directorio
@@ -79,10 +77,6 @@ DeviceList* monitor_connected_devices(int interval_seconds) {
             printf("  - %s\n", device_list->devices[i]);
         }
         printf("---\n");
-        
-        // Esperar el intervalo especificado antes de la siguiente verificación
-        sleep(interval_seconds);
-    }
     
     return device_list;
 }
