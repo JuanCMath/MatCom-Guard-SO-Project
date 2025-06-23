@@ -345,8 +345,7 @@ int analyze_usb_device(const char *device_name) {
     char log_msg[512];
     snprintf(log_msg, sizeof(log_msg), 
              "Creando snapshot del dispositivo: %s", device_name);
-    gui_add_log_entry("USB_ANALYZER", "INFO", log_msg);
-      // Paso 1: Crear un snapshot completo del dispositivo actual
+    gui_add_log_entry("USB_ANALYZER", "INFO", log_msg);      // Paso 1: Crear un snapshot completo del dispositivo actual
     // Esta operación puede tomar tiempo ya que calcula hashes SHA-256 de todos los archivos
     DeviceSnapshot* new_snapshot = create_device_snapshot(device_name);
     if (!new_snapshot) {
@@ -356,8 +355,17 @@ int analyze_usb_device(const char *device_name) {
         return -1;
     }
     
+    // Validar la integridad del snapshot antes de continuar
+    if (validate_device_snapshot(new_snapshot) != 0) {
+        snprintf(log_msg, sizeof(log_msg), 
+                 "Snapshot de %s falló validación de integridad", device_name);
+        gui_add_log_entry("USB_ANALYZER", "ERROR", log_msg);
+        free_device_snapshot(new_snapshot);
+        return -1;
+    }
+    
     // Debug: Verificar el estado del snapshot recién creado
-    printf("DEBUG: Snapshot creado exitosamente para %s\n", device_name);
+    printf("DEBUG: Snapshot creado y validado exitosamente para %s\n", device_name);
     printf("DEBUG: new_snapshot=%p, device_name=%p\n", new_snapshot, new_snapshot->device_name);
     if (new_snapshot->device_name) {
         printf("DEBUG: device_name content: '%s'\n", new_snapshot->device_name);

@@ -1,3 +1,4 @@
+#define _GNU_SOURCE  // Para strdup y strnlen
 #include <device_monitor.h>
 
 // ============================================================================
@@ -257,18 +258,40 @@ DeviceSnapshot* create_device_snapshot(const char *device_name) {
         return NULL;
     }
     
+    // Validar que device_name sea una cadena válida antes de proceder
+    size_t name_len = strnlen(device_name, 256);
+    if (name_len == 0 || name_len >= 256) {
+        printf("Error: device_name inválido (longitud: %zu)\n", name_len);
+        return NULL;
+    }
+    
+    // Validar que device_name contenga solo caracteres válidos para nombres de dispositivos
+    for (size_t i = 0; i < name_len; i++) {
+        char c = device_name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+              (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) {
+            printf("Error: device_name contiene caracteres inválidos\n");
+            return NULL;
+        }
+    }
+    
     DeviceSnapshot *snapshot = malloc(sizeof(DeviceSnapshot));
     if (!snapshot) {
         printf("Error: No se pudo asignar memoria para snapshot\n");
         return NULL;
     }
     
-    snapshot->device_name = strdup(device_name);
+    // Usar malloc + strncpy en lugar de strdup para mayor control
+    snapshot->device_name = malloc(name_len + 1);
     if (!snapshot->device_name) {
         printf("Error: No se pudo asignar memoria para device_name\n");
         free(snapshot);
         return NULL;
     }
+    
+    // Copiar de forma segura y asegurar terminación nula
+    strncpy(snapshot->device_name, device_name, name_len);
+    snapshot->device_name[name_len] = '\0';
     
     snapshot->files = malloc(100 * sizeof(FileInfo*)); // Capacidad inicial
     if (!snapshot->files) {
@@ -306,19 +329,122 @@ DeviceSnapshot* create_device_snapshot(const char *device_name) {
  * @param snapshot: Puntero al snapshot a liberar
  */
 void free_device_snapshot(DeviceSnapshot *snapshot) {
-    if (snapshot != NULL) {
-        // Liberar información de cada archivo
+    if (snapshot == NULL) {
+        return;
+    }
+    
+    // Verificar que el puntero esté en un rango de memoria razonable
+    uintptr_t addr = (uintptr_t)snapshot;
+    if (addr < 0x1000 || addr > 0x7fffffffffff) {
+        printf("Warning: Intentando liberar snapshot con dirección sospechosa: %p\n", 
+               (void*)snapshot);
+        return;
+    }
+    
+    // Liberar información de cada archivo de forma segura
+    if (snapshot->files != NULL && snapshot->file_count > 0) {
         for (int i = 0; i < snapshot->file_count; i++) {
             FileInfo *file = snapshot->files[i];
-            free(file->path);
-            free(file->name);
-            free(file->extension);
-            free(file);
+            if (file != NULL) {
+                // Verificar punteros antes de liberar
+                if (file->path != NULL) {
+                    free(file->path);
+                    file->path = NULL;
+                }
+                if (file->name != NULL) {
+                    free(file->name);
+                    file->name = NULL;
+                }
+                if (file->extension != NULL) {
+                    free(file->extension);
+                    file->extension = NULL;
+                }
+                free(file);
+                snapshot->files[i] = NULL;
+            }
+        }
+    }
+    
+    // Liberar arrays y estructura
+    if (snapshot->files != NULL) {
+        free(snapshot->files);
+        snapshot->files = NULL;
+    }
+    
+    if (snapshot->device_name != NULL) {
+        free(snapshot->device_name);
+        snapshot->device_name = NULL;
+    }
+    
+    // Limpiar campos para detectar uso después de liberación
+    snapshot->file_count = -1;
+    snapshot->capacity = -1;
+    snapshot->snapshot_time = 0;
+    
+    free(snapshot);
+}
+
+/**
+ * Valida la integridad de un snapshot de dispositivo
+ * 
+ * @param snapshot: Puntero al snapshot a validar
+ * @return int: 0 si es válido, -1 si es inválido
+ */
+int validate_device_snapshot(const DeviceSnapshot *snapshot) {
+    if (!snapshot) {
+        printf("Error: snapshot es NULL\n");
+        return -1;
+    }
+    
+    // Validar device_name
+    if (!snapshot->device_name) {
+        printf("Error: device_name en snapshot es NULL\n");
+        return -1;
+    }
+    
+    // Validar que device_name sea una cadena válida
+    size_t name_len = strnlen(snapshot->device_name, 256);
+    if (name_len == 0 || name_len >= 256) {
+        printf("Error: device_name en snapshot tiene longitud inválida: %zu\n", name_len);
+        return -1;
+    }
+    
+    // Validar puntero de archivos
+    if (snapshot->file_count > 0 && !snapshot->files) {
+        printf("Error: snapshot indica archivos pero files es NULL\n");
+        return -1;
+    }
+    
+    // Validar capacidad vs count
+    if (snapshot->file_count > snapshot->capacity) {
+        printf("Error: file_count (%d) excede capacity (%d)\n", 
+               snapshot->file_count, snapshot->capacity);
+        return -1;
+    }
+    
+    // Validar cada archivo si existen
+    for (int i = 0; i < snapshot->file_count; i++) {
+        FileInfo *file = snapshot->files[i];
+        if (!file) {
+            printf("Error: archivo %d es NULL en snapshot\n", i);
+            return -1;
         }
         
-        // Liberar arrays y estructura
-        free(snapshot->files);
-        free(snapshot->device_name);
-        free(snapshot);
+        if (!file->path || !file->name) {
+            printf("Error: archivo %d tiene path o name NULL\n", i);
+            return -1;
+        }
+        
+        // Validar longitudes de cadenas
+        if (strnlen(file->path, 4096) >= 4096 || 
+            strnlen(file->name, 256) >= 256) {
+            printf("Error: archivo %d tiene path o name demasiado largo\n", i);
+            return -1;
+        }
     }
+    
+    printf("Validación de snapshot exitosa: %s (%d archivos)\n", 
+           snapshot->device_name, snapshot->file_count);
+    
+    return 0;
 }

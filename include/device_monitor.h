@@ -50,5 +50,6 @@ char* get_file_extension(const char *filename);
 int scan_directory_recursive(DeviceSnapshot *snapshot, const char *dir_path);
 DeviceSnapshot* create_device_snapshot(const char *device_name);
 void free_device_snapshot(DeviceSnapshot *snapshot);
+int validate_device_snapshot(const DeviceSnapshot *snapshot);
 
 #endif // DEVICE_MONITOR_H

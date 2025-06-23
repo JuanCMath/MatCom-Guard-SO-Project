@@ -1,3 +1,4 @@
+#define _GNU_SOURCE  // Para strnlen
 #include "gui_backend_adapters.h"
 #include <string.h>
 #include <stdlib.h>
