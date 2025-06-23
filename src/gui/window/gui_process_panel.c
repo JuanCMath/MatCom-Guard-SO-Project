@@ -112,25 +112,40 @@ static void on_process_selection_changed(GtkTreeSelection *selection, gpointer d
 // Callback para re-habilitar botón después del escaneo
 static gboolean re_enable_process_button(gpointer data) {
     GtkButton *button = GTK_BUTTON(data);
+    
+    printf(">>> Timer ejecutándose - verificando estado del escaneo\n");
+    
     if (!is_gui_process_scan_in_progress()) {
+        printf(">>> Escaneo completado - rehabilitando botón\n");
         gtk_widget_set_sensitive(GTK_WIDGET(button), TRUE);
         gtk_button_set_label(button, "🔍 Escanear Procesos");
         gui_set_scanning_status(FALSE);
+        printf(">>> Botón rehabilitado exitosamente\n");
+        return G_SOURCE_REMOVE; // Detener el timer
+    } else {
+        printf(">>> Escaneo aún en progreso - continuando timer\n");
+        return G_SOURCE_CONTINUE; // Continuar verificando
     }
-    return G_SOURCE_REMOVE;
 }
 
 // Callback para el botón de escaneo de procesos
 static void on_scan_processes_clicked(GtkButton *button, gpointer data) {
+    printf("=== DIAGNÓSTICO PROCESO ESCANEO ===\n");
+    printf("1. Botón presionado\n");
+    
     if (!processes_callback) {
+        printf("ERROR: processes_callback es NULL\n");
         gui_add_log_entry("PROCESS_SCANNER", "WARNING", "No hay callback de escaneo de procesos configurado");
         return;
     }
+    printf("2. Callback verificado - OK\n");
     
     if (is_gui_process_scan_in_progress()) {
+        printf("WARNING: Escaneo ya en progreso\n");
         gui_add_log_entry("PROCESS_SCANNER", "WARNING", "Escaneo de procesos ya en progreso");
         return;
     }
+    printf("3. Estado verificado - no hay escaneo previo\n");
     
     gui_add_log_entry("PROCESS_SCANNER", "INFO", "Iniciando escaneo de procesos del sistema");
     gui_set_scanning_status(TRUE);
@@ -138,12 +153,17 @@ static void on_scan_processes_clicked(GtkButton *button, gpointer data) {
     // Deshabilitar el botón durante el escaneo
     gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
     gtk_button_set_label(button, "🔄 Escaneando...");
+    printf("4. Botón deshabilitado y etiqueta cambiada\n");
     
     // Iniciar escaneo en hilo separado
+    printf("5. Llamando a gui_compatible_scan_processes()\n");
     gui_compatible_scan_processes();
+    printf("6. gui_compatible_scan_processes() retornó\n");
     
     // Verificar periódicamente si terminó el escaneo
+    printf("7. Configurando timer de verificación\n");
     g_timeout_add_seconds(1, re_enable_process_button, button);
+    printf("=== FIN DIAGNÓSTICO - Timer configurado ===\n");
 }
 
 // Callback para terminar un proceso
