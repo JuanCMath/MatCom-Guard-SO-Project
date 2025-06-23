@@ -1,0 +1,62 @@
+================================================================================
+INFORME DE PRUEBAS RF2 - MATCOM GUARD  
+================================================================================
+Fecha: Sun Jun 22 11:41:02 PM UTC 2025
+Sistema: Linux Ubuntu1 6.11.0-26-generic #26~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Apr 17 19:20:47 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+================================================================================
+
+[0;34m[INFO][0m Configurando umbrales para pruebas...
+[0;32m[✓][0m Config: CPU=70%, RAM=50%, Whitelist incluye 'yes'
+
+[1;33m=== CASO 1: PROCESO LEGÍTIMO (LISTA BLANCA) ===[0m
+[0;34m[INFO][0m Acción: Ejecutar 'yes' (alto CPU pero en lista blanca)
+[0;34m[INFO][0m Esperado: Sin alertas
+[0;32m[✓][0m Monitor iniciado (PID: 16681)
+[0;34m[INFO][0m Proceso 'yes' iniciado (PID: 16708)
+[0;32m[✓][0m ✓ Sin alertas (correcto para lista blanca)
+[0;32m[✓][0m Monitor detenido
+
+[1;33m=== CASO 2: PROCESO MALICIOSO (ALTO CPU) ===[0m
+[0;34m[INFO][0m Acción: Ejecutar bucle infinito bash
+[0;34m[INFO][0m Esperado: Alerta de alto CPU
+[0;32m[✓][0m Monitor iniciado (PID: 16776)
+[0;34m[INFO][0m Proceso malicioso iniciado (PID: 16782)
+[0;31m[✗][0m ✗ Alerta esperada no detectada para 'bash' (CPU)
+[0;32m[✓][0m Monitor detenido
+
+[1;33m=== CASO 3: FUGA DE MEMORIA (ALTO RAM) ===[0m
+[0;34m[INFO][0m Acción: Consumir memoria progresivamente
+[0;34m[INFO][0m Esperado: Alerta de alto RAM
+[0;32m[✓][0m Monitor iniciado (PID: 16864)
+[0;34m[INFO][0m Consumidor memoria iniciado (PID: 16879)
+[0;31m[✗][0m ✗ Alerta esperada no detectada para 'memory_test' (RAM)
+[0;32m[✓][0m Monitor detenido
+
+[1;33m=== CASO 4: PROCESO FANTASMA (LIMPIEZA) ===[0m
+[0;34m[INFO][0m Acción: Terminar proceso y verificar limpieza
+[0;34m[INFO][0m Esperado: Sistema detecta terminación
+[0;32m[✓][0m Monitor iniciado (PID: 17095)
+[0;34m[INFO][0m Proceso sleep iniciado (PID: 17122)
+[0;34m[INFO][0m Proceso detectado 0
+0 veces antes de terminación
+[0;34m[INFO][0m Proceso terminado
+[0;31m[✗][0m ✗ Limpieza no detectada
+[0;32m[✓][0m Monitor detenido
+
+[1;33m=== RESUMEN DE PRUEBAS ===[0m
+
+ESTADÍSTICAS:
+- Tests pasados: 1/4
+- Alertas totales: 0
+0
+- Procesos nuevos: 281
+- Procesos terminados: 3
+[1;33m[⚠][0m ⚠️ ALGUNAS PRUEBAS FALLARON (1/4)
+
+ARCHIVOS GENERADOS:
+- Informe: /media/sf_ProyectoSO/MatCom-Guard-SO-Project/informe_pruebas_rf2.txt
+- Log monitor: /media/sf_ProyectoSO/MatCom-Guard-SO-Project/monitor_test.log
+[0;34m[INFO][0m ==================================================================================
+[0;34m[INFO][0m Informe completo: /media/sf_ProyectoSO/MatCom-Guard-SO-Project/informe_pruebas_rf2.txt
+[0;34m[INFO][0m Log del monitor: /media/sf_ProyectoSO/MatCom-Guard-SO-Project/monitor_test.log
+[0;34m[INFO][0m ==================================================================================
