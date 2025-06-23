@@ -1,18 +1,54 @@
-#ifndef DEVICE_MONITOR_H  
-#define DEVICE_MONITOR_H  
+#ifndef DEVICE_MONITOR_H
+#define DEVICE_MONITOR_H
 
-#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <openssl/evp.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <time.h>
 
-// Estructura para almacenar info de dispositivos
+// Estructura para almacenar información de dispositivos conectados
 typedef struct {
-    char dev_name[50];
-    char mount_point[256];
-    bool is_suspicious;
-} USBDevice;
+    char **devices;     // Array de nombres de dispositivos
+    int count;          // Número de dispositivos encontrados
+    int capacity;       // Capacidad actual del array
+} DeviceList;
 
-// Funciones
-void monitor_usb_devices();
-void scan_usb_filesystem(const char *mount_point);
-bool detect_suspicious_changes(const char *path);
+// Estructura para almacenar información de un archivo
+typedef struct {
+    char *path;                 // Ruta completa del archivo
+    char *name;                 // Nombre del archivo
+    char *extension;            // Extensión del archivo
+    off_t size;                 // Tamaño del archivo
+    char sha256_hash[65];       // Hash SHA-256 (64 caracteres + null terminator)
+    mode_t permissions;         // Permisos del archivo
+    time_t last_modified;       // Última modificación
+    time_t last_accessed;       // Último acceso
+} FileInfo;
 
-#endif  
+// Estructura para almacenar el snapshot de un dispositivo
+typedef struct {
+    char *device_name;          // Nombre del dispositivo
+    FileInfo **files;           // Array de archivos
+    int file_count;             // Número de archivos
+    int capacity;               // Capacidad del array
+    time_t snapshot_time;       // Tiempo del snapshot
+} DeviceSnapshot;
+
+// Funciones para monitoreo de dispositivos
+DeviceList* monitor_connected_devices(int interval_seconds);
+void free_device_list(DeviceList *device_list);
+
+// Funciones para manejo de archivos y snapshots
+int calculate_sha256(const char *filepath, char *hash_output);
+char* get_file_extension(const char *filename);
+int scan_directory_recursive(DeviceSnapshot *snapshot, const char *dir_path);
+DeviceSnapshot* create_device_snapshot(const char *device_name);
+void free_device_snapshot(DeviceSnapshot *snapshot);
+
+#endif // DEVICE_MONITOR_H
