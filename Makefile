@@ -1,17 +1,49 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -Iinclude $(shell pkg-config --cflags gtk+-3.0)
-LIBS = $(shell pkg-config --libs gtk+-3.0) -ludev -lssl -lcrypto -lpthread
+CFLAGS = -Wall -Wextra -std=c99 -g -Iinclude -DDEBUG
+GTK_FLAGS = `pkg-config --cflags --libs gtk+-3.0`
+LIBS = -lcrypto -lpthread -ludev
 
-SRC = src/main.c src/device_monitor.c src/process_monitor.c src/port_scanner.c src/gui.c
+TARGET = matcom-guard
+SRC = src/main.c \
+		src/port_scanner.c \
+		src/process_monitor.c \
+		src/device_monitor.c \
+		src/auxiliar_methods.c \
+		src/gui/gui_main.c \
+		src/gui/window/gui_logging.c \
+		src/gui/window/gui_stats.c \
+		src/gui/window/gui_status.c \
+		src/gui/window/gui_usb_panel.c \
+		src/gui/window/gui_process_panel.c \
+		src/gui/window/gui_ports_panel.c \
+		src/gui/window/gui_config_dialog.c \
+		src/gui/integration/gui_system_coordinator.c \
+		src/gui/integration/gui_backend_adapters.c \
+		src/gui/integration/gui_process_integration.c \
+		src/gui/integration/gui_ports_integration.c \
+		src/gui/integration/gui_usb_integration.c
+		
+.PHONY: all clean install test
 
-all: matcom-guard
+all: $(TARGET)
 
-matcom-guard: $(SRC)
-	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
-
-# Ejemplo de monitoreo de procesos
-process_monitor_example: src/process_monitor_gui.c src/process_monitor.c
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+$(TARGET): $(SRC)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(GTK_FLAGS) $(LIBS)
 
 clean:
-	rm -f matcom-guard process_monitor_example
+	rm -f $(TARGET) *.o
+
+install: $(TARGET)
+	sudo cp $(TARGET) /usr/local/bin/
+
+test: $(TARGET)
+	./$(TARGET)
+
+debug: $(SRC)
+	$(CC) $(CFLAGS) -DDEBUG -o $(TARGET)_debug $(SRC) $(GTK_FLAGS) $(LIBS)
+
+check-deps:
+	@echo "Verificando dependencias..."
+	@pkg-config --exists gtk+-3.0 && echo "✓ GTK+3 encontrado" || echo "✗ GTK+3 no encontrado"
+	@ldconfig -p | grep -q libcrypto && echo "✓ OpenSSL encontrado" || echo "✗ OpenSSL no encontrado"
+	@ldconfig -p | grep -q libudev && echo "✓ libudev encontrado" || echo "✗ libudev no encontrado"
