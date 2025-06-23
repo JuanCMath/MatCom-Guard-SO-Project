@@ -106,6 +106,10 @@ int get_port_scan_progress(float *progress_percentage, int *ports_scanned,
 
 /**
  * @brief Limpia recursos y finaliza la integración de puertos
+ * 
+ * Esta función debe ser llamada antes de cerrar la aplicación para asegurar
+ * que todos los hilos de escaneo terminen correctamente y se libere toda
+ * la memoria asignada. Es crítica para prevenir memory leaks y segfaults.
  */
 void cleanup_ports_integration(void);
 
@@ -263,4 +267,5 @@ void on_port_scan_completed(const PortInfo *scan_results, int result_count, int 
  */
 void on_suspicious_port_detected(const PortInfo *port_info, const char *threat_description);
 
+// ============================================================================
 #endif // GUI_PORTS_INTEGRATION_H

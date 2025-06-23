@@ -596,6 +596,7 @@ void gui_export_report_to_pdf(const char *filename) {
         cairo_t *cr = cairo_create(surface);
         if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
             printf("Error: No se pudo crear el contexto Cairo\n");
+            cairo_destroy(cr);  // Liberar contexto incluso si falló
             cairo_surface_destroy(surface);
             g_free(log_content);
             return;
@@ -656,10 +657,17 @@ void gui_export_report_to_pdf(const char *filename) {
         
         // ================================================================
         // ESCRITURA DE ESTADÍSTICAS CON PAGINACIÓN AUTOMÁTICA
-        // ================================================================
-        // Control preciso de paginación para evitar cortes abruptos
+        // ================================================================        // Control preciso de paginación para evitar cortes abruptos
         
         char *stats_copy = strdup(wrapped_stats);  // Copia para strtok (modifica original)
+        if (!stats_copy) {
+            printf("Error: No se pudo asignar memoria para stats_copy\n");
+            cairo_destroy(cr);
+            cairo_surface_destroy(surface);
+            g_free(log_content);
+            return;
+        }
+        
         char *stats_line = strtok(stats_copy, "\n");
         while (stats_line != NULL) {
             // Verificar si necesitamos nueva página antes de escribir
@@ -674,7 +682,7 @@ void gui_export_report_to_pdf(const char *filename) {
             y += line_height;
             stats_line = strtok(NULL, "\n");
         }
-        free(stats_copy);  // Liberar memoria de la copia        
+        free(stats_copy);  // Liberar memoria de la copia
         y += line_height;  // Espacio entre secciones
         
         // ================================================================
@@ -697,14 +705,21 @@ void gui_export_report_to_pdf(const char *filename) {
         
         char wrapped_log[65536];  // Buffer grande para log con saltos de línea (64KB)
         wrap_text_for_pdf(filtered_log, wrapped_log, sizeof(wrapped_log), max_chars_per_line);
-        
-        // ================================================================
+          // ================================================================
         // ESCRITURA DEL LOG CON CONTROL DE PAGINACIÓN
         // ================================================================
         // Escritura línea por línea con verificación automática
         // de límites de página para asegurar que todo el contenido se incluya
         
         char *log_copy = strdup(wrapped_log);  // Copia para preservar original
+        if (!log_copy) {
+            printf("Error: No se pudo asignar memoria para log_copy\n");
+            cairo_destroy(cr);
+            cairo_surface_destroy(surface);
+            g_free(log_content);
+            return;
+        }
+        
         char *log_line = strtok(log_copy, "\n");
         while (log_line != NULL) {
             // Control automático de paginación
@@ -720,15 +735,12 @@ void gui_export_report_to_pdf(const char *filename) {
             log_line = strtok(NULL, "\n");
         }
         free(log_copy);  // Limpiar memoria
-        
-        // ================================================================
+          // ================================================================
         // FINALIZACIÓN Y LIMPIEZA
         // ================================================================
         cairo_destroy(cr);                    // Liberar contexto Cairo
         cairo_surface_finish(surface);       // Finalizar escritura a archivo
         cairo_surface_destroy(surface);      // Liberar superficie
-        cairo_surface_finish(surface);
-        cairo_surface_destroy(surface);
         
         printf("✅ Reporte PDF exportado exitosamente a: %s\n", filename);
     }

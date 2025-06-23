@@ -6,6 +6,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 //Variables de logging
 GtkWidget *log_text_view = NULL;
 GtkTextBuffer *log_buffer = NULL;
@@ -59,8 +63,37 @@ GtkWidget* create_log_area() {
    return scrolled_window;
 }
 
-void gui_add_log_entry(const char *module, const char *level, const char *message) {
-    if (!log_buffer) return;
+// Función helper para duplicar strings de forma segura
+static char* safe_strdup(const char* str) {
+    if (!str) return NULL;
+    size_t len = strlen(str) + 1;
+    char* copy = malloc(len);
+    if (copy) {
+        memcpy(copy, str, len);
+    }
+    return copy;
+}
+
+// Estructura para pasar datos entre hilos de forma segura
+typedef struct {
+    char *module;
+    char *level;
+    char *message;
+} LogEntryData;
+
+// Función que se ejecuta en el hilo principal de GTK
+static gboolean add_log_entry_main_thread(gpointer user_data) {
+    LogEntryData *data = (LogEntryData *)user_data;
+    
+    if (!log_buffer || !data) {
+        if (data) {
+            free(data->module);
+            free(data->level);
+            free(data->message);
+            free(data);
+        }
+        return FALSE;
+    }
     
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);
@@ -70,23 +103,25 @@ void gui_add_log_entry(const char *module, const char *level, const char *messag
     char full_message[1024];
     snprintf(full_message, sizeof(full_message), 
              "[%s] %s | %s: %s\n", 
-             timestamp, level, module, message);
+             timestamp, data->level, data->module, data->message);
     
-    // Iterador al final del buffer de texto
+    // Obtener el iterador al final del buffer de forma segura
     GtkTextIter end_iter;
     gtk_text_buffer_get_end_iter(log_buffer, &end_iter);
     
+    // Seleccionar el tag apropiado
     GtkTextTag *tag = NULL;
-    if (strcmp(level, "INFO") == 0) {
+    if (strcmp(data->level, "INFO") == 0) {
         tag = info_tag;
-    } else if (strcmp(level, "WARNING") == 0) {
+    } else if (strcmp(data->level, "WARNING") == 0) {
         tag = warning_tag;
-    } else if (strcmp(level, "ERROR") == 0) {
+    } else if (strcmp(data->level, "ERROR") == 0) {
         tag = error_tag;
-    } else if (strcmp(level, "ALERT") == 0) {
+    } else if (strcmp(data->level, "ALERT") == 0) {
         tag = alert_tag;
     }
 
+    // Insertar el texto de forma segura
     if (tag) {
         gtk_text_buffer_insert_with_tags(log_buffer, &end_iter, 
                                          full_message, -1, tag, NULL);
@@ -94,10 +129,42 @@ void gui_add_log_entry(const char *module, const char *level, const char *messag
         gtk_text_buffer_insert(log_buffer, &end_iter, full_message, -1);
     }
     
-    // Auto-scroll al final para mostrar siempre el mensaje más reciente
-    GtkTextMark *end_mark = gtk_text_buffer_get_insert(log_buffer);
+    // Auto-scroll al final usando una marca del final del buffer
+    gtk_text_buffer_get_end_iter(log_buffer, &end_iter);
+    GtkTextMark *end_mark = gtk_text_buffer_create_mark(log_buffer, NULL, &end_iter, FALSE);
     gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(log_text_view), end_mark);
+    gtk_text_buffer_delete_mark(log_buffer, end_mark);
     
     // Imprimir también en consola para debugging
     printf("%s", full_message);
+    
+    // Liberar memoria
+    free(data->module);
+    free(data->level);
+    free(data->message);
+    free(data);
+    
+    return FALSE; // Solo ejecutar una vez
+}
+
+void gui_add_log_entry(const char *module, const char *level, const char *message) {
+    if (!log_buffer || !module || !level || !message) return;
+    
+    // Crear una copia de los datos para pasarlos al hilo principal de forma segura
+    LogEntryData *data = malloc(sizeof(LogEntryData));
+    if (!data) return;
+      data->module = safe_strdup(module);
+    data->level = safe_strdup(level);
+    data->message = safe_strdup(message);
+    
+    if (!data->module || !data->level || !data->message) {
+        free(data->module);
+        free(data->level);
+        free(data->message);
+        free(data);
+        return;
+    }
+    
+    // Programar la actualización del log en el hilo principal de GTK
+    g_idle_add(add_log_entry_main_thread, data);
 }

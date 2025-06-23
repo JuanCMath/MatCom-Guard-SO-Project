@@ -1,5 +1,6 @@
 #include "gui_ports_integration.h"
 #include "gui_internal.h"
+#include "port_scanner.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,25 +82,164 @@ static void* port_scanning_thread_function(void* arg) {
              pconfig->start_port, pconfig->end_port);
     gui_add_log_entry("PORT_SCANNER", "INFO", log_msg);
     
-    // Calcular el total de puertos a escanear para tracking de progreso
+    // Configurar estado de escaneo
     pthread_mutex_lock(&ports_state.state_mutex);
     
-    if (ports_state.initialized) {
-        // Liberar resultados almacenados
-        if (ports_state.last_results) {
-            free(ports_state.last_results);
-            ports_state.last_results = NULL;
-        }
-        
-        ports_state.initialized = 0;
-        ports_state.scan_active = 0;
-        ports_state.last_results_count = 0;
+    // Liberar resultados anteriores
+    if (ports_state.last_results) {
+        free(ports_state.last_results);
+        ports_state.last_results = NULL;
     }
+    
+    ports_state.total_ports_to_scan = pconfig->end_port - pconfig->start_port + 1;
+    ports_state.ports_completed = 0;
+    ports_state.scan_start_time = time(NULL);
+    ports_state.last_progress_percentage = 0.0;
+    ports_state.should_stop_scan = 0;
     
     pthread_mutex_unlock(&ports_state.state_mutex);
     
-    gui_add_log_entry("PORT_INTEGRATION", "INFO", 
-                     "Integración de puertos finalizada y recursos liberados");
+    // Crear array para almacenar resultados
+    int total_ports = pconfig->end_port - pconfig->start_port + 1;
+    PortInfo *scan_results = malloc(total_ports * sizeof(PortInfo));
+    if (!scan_results) {
+        gui_add_log_entry("PORT_INTEGRATION", "ERROR", 
+                         "Error de memoria al inicializar escaneo");
+        free(pconfig);
+        return NULL;
+    }
+    
+    int results_count = 0;
+    int open_ports = 0;
+    int suspicious_ports = 0;
+    
+    // ESCANEO REAL PUERTO POR PUERTO
+    for (int port = pconfig->start_port; port <= pconfig->end_port; port++) {
+        // Verificar si se debe cancelar
+        pthread_mutex_lock(&ports_state.state_mutex);
+        int should_stop = ports_state.should_stop_scan;
+        pthread_mutex_unlock(&ports_state.state_mutex);        if (should_stop) {
+            gui_add_log_entry("PORT_SCANNER", "INFO", "Escaneo cancelado por usuario");
+            // Llamar al callback para notificar cancelación
+            on_port_scan_completed(NULL, 0, 1);  // 1 = cancelado
+            // Limpiar memoria antes de salir
+            free(scan_results);
+            free(pconfig);
+            pthread_mutex_lock(&ports_state.state_mutex);
+            ports_state.scan_active = 0;
+            ports_state.scan_cancelled = 1;
+            pthread_mutex_unlock(&ports_state.state_mutex);
+            gui_set_scanning_status(FALSE);
+            return NULL;
+        }
+        
+        // Escanear el puerto usando la función del backend
+        int is_open = scan_specific_port(port);
+        
+        if (is_open == 1) {  // Puerto abierto
+            PortInfo *port_info = &scan_results[results_count];
+            port_info->port = port;
+            port_info->is_open = 1;
+            
+            // Obtener información del servicio usando funciones del backend
+            // Como no tenemos acceso directo a get_service_name, usamos lógica similar
+            int is_suspicious = 0;
+            
+            // Mapeo de servicios basado en el backend
+            if (port == 31337 || port == 4444 || port == 6667) {
+                is_suspicious = 1;
+                if (port == 31337) strcpy(port_info->service_name, "Elite/Backdoor");
+                else if (port == 4444) strcpy(port_info->service_name, "Metasploit");
+                else if (port == 6667) strcpy(port_info->service_name, "IRC");
+            } else if (port == 23) {
+                strcpy(port_info->service_name, "Telnet");
+                is_suspicious = 1;
+            } else if (port == 3389) {
+                strcpy(port_info->service_name, "RDP");
+                is_suspicious = 1;
+            } else if (port == 5900) {
+                strcpy(port_info->service_name, "VNC");
+                is_suspicious = 1;
+            } else if (port == 21) {
+                strcpy(port_info->service_name, "FTP");
+            } else if (port == 22) {
+                strcpy(port_info->service_name, "SSH");
+            } else if (port == 80) {
+                strcpy(port_info->service_name, "HTTP");
+            } else if (port == 443) {
+                strcpy(port_info->service_name, "HTTPS");
+            } else if (port == 8080) {
+                strcpy(port_info->service_name, "HTTP-Alt");
+            } else if (port > 1024) {
+                strcpy(port_info->service_name, "Unknown");
+                is_suspicious = 1;  // Puertos altos sin justificación
+            } else {
+                strcpy(port_info->service_name, "Unknown");
+            }
+            
+            port_info->is_suspicious = is_suspicious;
+            
+            open_ports++;            if (is_suspicious) {
+                suspicious_ports++;
+                // Reducir la cantidad de logs para puertos sospechosos en escaneo completo
+                if (total_ports < 1000) {  // Solo log detallado para escaneos pequeños
+                    snprintf(log_msg, sizeof(log_msg), 
+                             "[ALERTA] Puerto %d/tcp abierto (%s) - SOSPECHOSO", 
+                             port, port_info->service_name);
+                    gui_add_log_entry("PORT_SCANNER", "WARNING", log_msg);
+                }
+            } else {
+                // Solo log para escaneos pequeños
+                if (total_ports < 1000) {
+                    snprintf(log_msg, sizeof(log_msg), 
+                             "[OK] Puerto %d/tcp (%s) abierto", 
+                             port, port_info->service_name);
+                    gui_add_log_entry("PORT_SCANNER", "INFO", log_msg);
+                }
+            }
+            
+            results_count++;
+        }
+          // Actualizar progreso
+        pthread_mutex_lock(&ports_state.state_mutex);
+        ports_state.ports_completed = port - pconfig->start_port + 1;
+        ports_state.last_progress_percentage = 
+            (float)ports_state.ports_completed / ports_state.total_ports_to_scan * 100.0;
+        pthread_mutex_unlock(&ports_state.state_mutex);
+        
+        // Mostrar progreso cada 100 puertos para reducir carga en GUI
+        if ((port - pconfig->start_port + 1) % 100 == 0) {
+            snprintf(log_msg, sizeof(log_msg), 
+                     "Progreso: %d/%d puertos escaneados (%.1f%%)", 
+                     ports_state.ports_completed, ports_state.total_ports_to_scan,
+                     ports_state.last_progress_percentage);
+            gui_add_log_entry("PORT_SCANNER", "INFO", log_msg);
+        }
+    }
+      // Finalizar escaneo y almacenar resultados
+    pthread_mutex_lock(&ports_state.state_mutex);
+    
+    ports_state.last_results = scan_results;
+    ports_state.last_results_count = results_count;
+    ports_state.last_scan_completion_time = time(NULL);
+    ports_state.scan_active = 0;
+    
+    pthread_mutex_unlock(&ports_state.state_mutex);
+    
+    // Reporte final
+    snprintf(log_msg, sizeof(log_msg), 
+             "Escaneo completado: %d puertos abiertos, %d sospechosos de %d totales", 
+             open_ports, suspicious_ports, total_ports);
+    gui_add_log_entry("PORT_SCANNER", "INFO", log_msg);
+    
+    // LLAMAR AL CALLBACK PARA ACTUALIZAR LA GUI
+    on_port_scan_completed(scan_results, results_count, 0);  // 0 = no cancelado
+    
+    // Actualizar estado de la GUI
+    gui_set_scanning_status(FALSE);
+    
+    free(pconfig);
+    return NULL;
 }
 
 // ============================================================================
@@ -110,14 +250,14 @@ int perform_quick_port_scan(void) {
     PortScanConfig pconfig = {
         .scan_type = SCAN_TYPE_QUICK,
         .start_port = 1,
-        .end_port = 1024,
+        .end_port = 32768,  // Extended range to include suspicious ports for testing
         .timeout_seconds = 1,
         .concurrent_scans = 1,
         .report_progress = 1
     };
     
     gui_add_log_entry("PORT_SCANNER", "INFO", 
-                     "Iniciando escaneo rápido de puertos comunes (1-1024)");
+                     "Iniciando escaneo rápido de puertos comunes (1-32768) + puertos sospechosos");
     
     return start_port_scan(&pconfig);
 }
@@ -403,7 +543,22 @@ void on_individual_port_scanned(const PortInfo *port_info, float progress_percen
     }
 }
 
+/**
+ * Callback principal que se ejecuta cuando el backend completa un escaneo de puertos.
+ * Convierte los resultados del backend a estructuras GUI y actualiza la interfaz.
+ * 
+ * @param scan_results Array de estructuras PortInfo con los resultados del escaneo
+ * @param result_count Número de puertos en scan_results
+ * @param scan_cancelled Indica si el escaneo fue cancelado (0=completo, 1=cancelado)
+ */
 void on_port_scan_completed(const PortInfo *scan_results, int result_count, int scan_cancelled) {
+    // LOG MUY VISIBLE PARA DEBUGGING
+    char main_msg[256];
+    snprintf(main_msg, sizeof(main_msg), 
+             "🔥🔥🔥 on_port_scan_completed EJECUTADO: %d puertos, cancelado=%d 🔥🔥🔥", 
+             result_count, scan_cancelled);
+    gui_add_log_entry("PORT_CALLBACK", "ALERT", main_msg);
+    
     if (scan_cancelled) {
         gui_add_log_entry("PORT_SCANNER", "WARNING", 
                          "Escaneo de puertos cancelado por el usuario");
@@ -417,7 +572,58 @@ void on_port_scan_completed(const PortInfo *scan_results, int result_count, int 
              result_count);
     gui_add_log_entry("PORT_SCANNER", "INFO", completion_msg);
     
-    // Actualizar estadísticas finales en la GUI
+    // ACTUALIZAR LA TABLA DE PUERTOS EN LA GUI DIRECTAMENTE
+    gui_add_log_entry("GUI_UPDATE", "INFO", "🔄 Iniciando actualización de tabla de puertos en GUI...");
+    
+    if (scan_results != NULL && result_count > 0) {
+        char update_msg[256];
+        snprintf(update_msg, sizeof(update_msg), 
+                 "📊 Procesando %d puertos para actualización de GUI", result_count);
+        gui_add_log_entry("GUI_UPDATE", "INFO", update_msg);
+        
+        // Convertir y actualizar cada puerto en la GUI DIRECTAMENTE
+        for (int i = 0; i < result_count; i++) {
+            GUIPort gui_port;
+            gui_port.port = scan_results[i].port;
+            gui_port.is_suspicious = scan_results[i].is_suspicious;
+            
+            // Convertir estado
+            if (scan_results[i].is_open) {
+                strcpy(gui_port.status, "open");
+            } else {
+                strcpy(gui_port.status, "closed");            }
+            
+            // Usar nombre de servicio si está disponible
+            if (strlen(scan_results[i].service_name) > 0) {
+                strcpy(gui_port.service, scan_results[i].service_name);
+            } else {
+                strcpy(gui_port.service, "unknown");
+            }
+            
+            // Actualizar GUI usando el hilo principal de GTK
+            GUIPort *port_copy = malloc(sizeof(GUIPort));
+            if (port_copy) {
+                *port_copy = gui_port;  // Copiar estructura
+                g_main_context_invoke(NULL, (GSourceFunc)gui_update_port_main_thread_wrapper, port_copy);
+            } else {
+                gui_add_log_entry("GUI_UPDATE", "ERROR", "Error de memoria al crear copia de puerto");
+            }
+        }
+        
+        char final_msg[256];
+        snprintf(final_msg, sizeof(final_msg), 
+                 "✅ Actualización de GUI completada: %d puertos procesados", result_count);
+        gui_add_log_entry("GUI_UPDATE", "INFO", final_msg);
+        
+    } else {
+        gui_add_log_entry("GUI_UPDATE", "WARNING", 
+                         "⚠️ No hay puertos para actualizar en la GUI");
+    }
+    
+    // Actualizar estado de la GUI
+    gui_set_scanning_status(FALSE);
+    
+    // Actualizar estadísticas finales en la GUI  
     int total_open, total_suspicious;
     time_t last_scan;
     if (get_port_statistics_for_gui(&total_open, &total_suspicious, &last_scan) == 0) {
@@ -653,9 +859,66 @@ int get_port_scan_progress(float *progress_percentage, int *ports_scanned,
     return 0;
 }
 
+// ============================================================================
+// FUNCIONES DE LIMPIEZA Y GESTIÓN DE RECURSOS
+// ============================================================================
+
+/**
+ * Función para limpiar todos los recursos del módulo de puertos de forma segura
+ * Debe ser llamada antes de cerrar la aplicación
+ */
 void cleanup_ports_integration(void) {
-    // Cancelar escaneo si está activo
-    if (is_port_scan_active()) {
-        cancel_port_scan();
+    gui_add_log_entry("PORT_INTEGRATION", "INFO", "Iniciando limpieza de recursos de puertos...");
+    
+    // Detener cualquier escaneo en progreso
+    pthread_mutex_lock(&ports_state.state_mutex);
+    if (ports_state.scan_active) {
+        ports_state.should_stop_scan = 1;
+        pthread_mutex_unlock(&ports_state.state_mutex);
+        
+        // Esperar a que termine el hilo de escaneo
+        pthread_join(ports_state.scan_thread, NULL);
+        gui_add_log_entry("PORT_INTEGRATION", "INFO", "Escaneo en progreso detenido");
+    } else {
+        pthread_mutex_unlock(&ports_state.state_mutex);
     }
+    
+    // Limpiar resultados almacenados
+    pthread_mutex_lock(&ports_state.state_mutex);
+    if (ports_state.last_results) {
+        free(ports_state.last_results);
+        ports_state.last_results = NULL;
+        ports_state.last_results_count = 0;
+    }
+    
+    // Resetear estado
+    ports_state.initialized = 0;
+    ports_state.scan_active = 0;
+    ports_state.scan_cancelled = 0;
+    pthread_mutex_unlock(&ports_state.state_mutex);
+    
+    gui_add_log_entry("PORT_INTEGRATION", "INFO", "Limpieza de recursos de puertos completada");
 }
+
+/**
+ * Función para validar el estado del sistema antes de operaciones críticas
+ */
+static int validate_ports_state(void) {
+    if (!ports_state.initialized) {
+        gui_add_log_entry("PORT_INTEGRATION", "ERROR", 
+                         "Sistema de puertos no inicializado");
+        return -1;
+    }
+    
+    // Verificar que no hay corrupción de memoria básica
+    if (ports_state.last_results_count < 0 || 
+        ports_state.total_ports_to_scan < 0 ||
+        ports_state.ports_completed < 0) {
+        gui_add_log_entry("PORT_INTEGRATION", "ERROR", 
+                         "Estado de puertos corrupto detectado");
+        return -1;
+    }
+      return 0;
+}
+
+// ============================================================================

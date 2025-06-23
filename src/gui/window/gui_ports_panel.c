@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 #include "gui.h"
+#include "gui_ports_integration.h"
 #include <gtk/gtk.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -175,8 +176,7 @@ static void on_quick_scan_clicked(GtkButton *button, gpointer data) {
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(start_port_spin), 1.0);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(end_port_spin), 1024.0);
     
-    // Iniciar escaneo
-    on_scan_ports_clicked(scan_ports_button, NULL);
+    // Iniciar escaneo    on_scan_ports_clicked(scan_ports_button, NULL);
 }
 
 // Callback para el botón de escaneo completo
@@ -242,9 +242,9 @@ void on_scan_ports_clicked(GtkButton *button, gpointer data) {
     gtk_widget_set_sensitive(quick_scan_button, FALSE);
     gtk_widget_set_sensitive(full_scan_button, FALSE);
     gtk_button_set_label(button, "🔄 Escaneando...");
-    
-    // Limpiar lista actual
+      // Limpiar lista actual
     gtk_list_store_clear(ports_list_store);
+    gui_add_log_entry("GUI_PORTS", "INFO", "🧹 Tabla de puertos limpiada antes del escaneo");
     
     // Iniciar escaneo en hilo separado
     gui_compatible_scan_ports();
@@ -316,9 +316,7 @@ GtkWidget* create_ports_panel() {
     gtk_widget_set_tooltip_text(quick_scan_button, "Escanear solo los puertos más comunes");
     g_signal_connect(quick_scan_button, "clicked", G_CALLBACK(on_quick_scan_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(config_box), quick_scan_button, FALSE, FALSE, 0);
-    
-    full_scan_button = gtk_button_new_with_label("🔍 Escaneo Completo (1-65535)");
-    gtk_widget_set_tooltip_text(full_scan_button, "Escanear todos los puertos posibles (lento)");
+      full_scan_button = gtk_button_new_with_label("🔍 Escaneo Completo (1-65535)");    gtk_widget_set_tooltip_text(full_scan_button, "Escanear todos los puertos posibles (lento)");
     g_signal_connect(full_scan_button, "clicked", G_CALLBACK(on_full_scan_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(config_box), full_scan_button, FALSE, FALSE, 0);
     
@@ -336,8 +334,7 @@ GtkWidget* create_ports_panel() {
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled_window),
                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_size_request(scrolled_window, 600, 300);
-    
-    // Crear el modelo de datos
+      // Crear el modelo de datos
     ports_list_store = gtk_list_store_new(NUM_PORT_COLS,
                                          G_TYPE_STRING,  // Icon
                                          G_TYPE_INT,     // Port number
@@ -347,10 +344,18 @@ GtkWidget* create_ports_panel() {
                                          G_TYPE_STRING,  // Status
                                          G_TYPE_STRING); // State color
     
-    ports_tree_view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(ports_list_store));
+    // Log de inicialización
+    gui_add_log_entry("GUI_PORTS", "INFO", "🏗️ ports_list_store inicializado correctamente");
+      ports_tree_view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(ports_list_store));
     gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(ports_tree_view), TRUE);
     gtk_tree_view_set_enable_search(GTK_TREE_VIEW(ports_tree_view), TRUE);
     gtk_tree_view_set_search_column(GTK_TREE_VIEW(ports_tree_view), COL_PORT_NUMBER);
+    
+    // Establecer un tamaño mínimo para evitar warnings de dimensiones
+    gtk_widget_set_size_request(ports_tree_view, 400, 200);
+    
+    // Log de verificación del TreeView
+    gui_add_log_entry("GUI_PORTS", "INFO", "🏗️ ports_tree_view creado y configurado");
     
     // Crear las columnas
     GtkCellRenderer *renderer;
@@ -441,18 +446,30 @@ GtkWidget* create_ports_panel() {
     gtk_box_pack_start(GTK_BOX(ports_status_bar), status_text, TRUE, TRUE, 0);
     
     gtk_box_pack_end(GTK_BOX(ports_panel_container), ports_status_bar, FALSE, FALSE, 0);
-    
-    return ports_panel_container;
+      return ports_panel_container;
 }
 
-// Función pública para actualizar un puerto
+/**
+ * Actualiza la tabla de puertos en la GUI con la información de un puerto detectado.
+ * Esta función debe ser llamada desde el hilo principal de GTK.
+ * 
+ * @param port Estructura GUIPort con la información del puerto a mostrar
+ */
 void gui_update_port(GUIPort *port) {
-    if (!ports_list_store || !port) return;
+    if (!port) {
+        gui_add_log_entry("GUI_PORTS", "ERROR", "gui_update_port llamado con puerto NULL");
+        return;
+    }
+    
+    if (!ports_list_store) {
+        gui_add_log_entry("GUI_PORTS", "ERROR", "❌ ports_list_store es NULL");
+        return;
+    }
     
     GtkTreeIter iter;
     gboolean found = FALSE;
     
-    // Buscar si el puerto ya existe
+    // Buscar si el puerto ya existe en la tabla
     if (gtk_tree_model_get_iter_first(GTK_TREE_MODEL(ports_list_store), &iter)) {
         do {
             gint existing_port;
@@ -471,12 +488,12 @@ void gui_update_port(GUIPort *port) {
         gtk_list_store_append(ports_list_store, &iter);
     }
     
-    // Determinar estado
+    // Determinar estado visual
     const char *state = strcmp(port->status, "open") == 0 ? "Abierto" : "Cerrado";
     const char *service = port->service[0] ? port->service : get_service_name(port->port);
-    const char *protocol = "TCP"; // Por defecto, podría venir del backend
+    const char *protocol = "TCP";
     
-    // Determinar si es sospechoso
+    // Determinar seguridad y color
     const char *security_status = "Normal";
     const char *color = "#4CAF50"; // Verde por defecto
     
@@ -490,7 +507,7 @@ void gui_update_port(GUIPort *port) {
     
     const char *icon = get_port_icon(port->port, state);
     
-    // Actualizar los datos
+    // Insertar/actualizar datos en la tabla
     gtk_list_store_set(ports_list_store, &iter,
                       COL_PORT_ICON, icon,
                       COL_PORT_NUMBER, port->port,
@@ -501,18 +518,58 @@ void gui_update_port(GUIPort *port) {
                       COL_PORT_STATE_COLOR, color,
                       -1);
     
-    // Log del evento si es sospechoso
-    if (port->is_suspicious || (strcmp(security_status, "SOSPECHOSO") == 0)) {
+    // Log apropiado según el estado del puerto
+    if (strcmp(security_status, "SOSPECHOSO") == 0) {
         char log_msg[256];
         snprintf(log_msg, sizeof(log_msg), 
-                "Puerto %d/%s abierto - Servicio: %s - REQUIERE ATENCIÓN",
-                port->port, protocol, service);
-        gui_add_log_entry("PORT_SCANNER", "ALERT", log_msg);
+                "🚨 Puerto sospechoso añadido: %d/%s (%s) - %s",
+                port->port, protocol, service, security_status);
+        gui_add_log_entry("GUI_PORTS", "WARNING", log_msg);
     } else if (strcmp(state, "Abierto") == 0) {
         char log_msg[256];
         snprintf(log_msg, sizeof(log_msg), 
-                "Puerto %d/%s abierto - Servicio: %s",
+                "✅ Puerto abierto añadido: %d/%s (%s)",
                 port->port, protocol, service);
-        gui_add_log_entry("PORT_SCANNER", "INFO", log_msg);
+        gui_add_log_entry("GUI_PORTS", "INFO", log_msg);
+    }
+    
+    // Refresco visual seguro
+    if (ports_tree_view && GTK_IS_WIDGET(ports_tree_view)) {
+        if (gtk_widget_get_realized(ports_tree_view) && gtk_widget_get_visible(ports_tree_view)) {
+            GtkAllocation allocation;
+            gtk_widget_get_allocation(ports_tree_view, &allocation);
+            
+            // Solo refrescar si el widget tiene dimensiones válidas
+            if (allocation.width > 0 && allocation.height > 0) {
+                gtk_widget_queue_draw(ports_tree_view);
+                gtk_tree_view_columns_autosize(GTK_TREE_VIEW(ports_tree_view));
+            }
+        }
     }
 }
+
+/**
+ * Función wrapper para ejecutar gui_update_port en el hilo principal de GTK.
+ * Usado por g_main_context_invoke para asegurar thread safety.
+ * 
+ * @param user_data Puntero a estructura GUIPort (será liberado automáticamente)
+ * @return FALSE para ejecutar solo una vez
+ */
+// Función wrapper para ejecutar gui_update_port en el hilo principal
+gboolean gui_update_port_main_thread_wrapper(gpointer user_data) {
+    GUIPort *port = (GUIPort *)user_data;
+    
+    if (!port) {
+        gui_add_log_entry("GUI_UPDATE", "ERROR", "gui_update_port_main_thread_wrapper: puerto NULL");
+        return FALSE;
+    }
+    
+    // Llamar a gui_update_port desde el hilo principal de GTK
+    gui_update_port(port);
+    
+    // Liberar memoria
+    free(port);
+    return FALSE; // Solo ejecutar una vez
+}
+
+// ============================================================================
