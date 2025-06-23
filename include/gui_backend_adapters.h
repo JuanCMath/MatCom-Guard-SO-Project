@@ -182,4 +182,59 @@ int generate_usb_status_string(int files_changed, gboolean is_suspicious,
  */
 int generate_port_status_string(int is_open, char *status_buffer, size_t buffer_size);
 
+// ============================================================================
+// EXPORTACIÓN DE REPORTES
+// ============================================================================
+
+/**
+ * @brief Exporta un reporte completo del sistema en formato PDF o TXT
+ * 
+ * Esta función genera un reporte completo que incluye:
+ * - Estadísticas actuales del sistema
+ * - Estado de dispositivos USB conectados
+ * - Información de procesos monitoreados
+ * - Historial completo del log de eventos
+ * 
+ * @param filename Ruta completa del archivo donde guardar el reporte (.pdf o .txt)
+ */
+void gui_export_report_to_pdf(const char *filename);
+
+// ============================================================================
+// UTILIDADES DE FORMATEO DE TEXTO
+// ============================================================================
+
+/**
+ * @brief Filtra caracteres emoji y no ASCII de una cadena de texto
+ * 
+ * Esta función remueve todos los caracteres que no son ASCII básico,
+ * incluyendo emojis, para asegurar compatibilidad con PDF y sistemas legacy.
+ * 
+ * @param input Cadena de entrada que puede contener emojis
+ * @param output Buffer donde almacenar la cadena filtrada
+ * @param output_size Tamaño del buffer de salida
+ */
+void filter_emoji_and_special_chars(const char *input, char *output, size_t output_size);
+
+/**
+ * @brief Divide una línea larga en múltiples líneas para ajustar al ancho de página
+ * 
+ * Esta función toma una línea que puede ser más larga que el ancho de página
+ * y la divide en líneas más cortas, respetando espacios para evitar cortar palabras.
+ * 
+ * @param input Línea de entrada (posiblemente larga)
+ * @param output Buffer donde almacenar las líneas divididas (separadas por \n)
+ * @param output_size Tamaño del buffer de salida
+ * @param max_width Ancho máximo permitido por línea
+ */
+void wrap_text_for_pdf(const char *input, char *output, size_t output_size, int max_width);
+
+/**
+ * @brief Cuenta el número de líneas en un texto después del word wrapping
+ * 
+ * @param text Texto a analizar
+ * @param max_width Ancho máximo por línea
+ * @return int Número de líneas que ocupará el texto
+ */
+int count_wrapped_lines(const char *text, int max_width);
+
 #endif // GUI_BACKEND_ADAPTERS_H

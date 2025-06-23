@@ -4,6 +4,7 @@
 #include "gui_usb_integration.h"
 #include "gui_ports_integration.h"
 #include "gui_system_coordinator.h"
+#include "gui_backend_adapters.h"
 #include <gtk/gtk.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -414,13 +415,12 @@ void init_gui(int argc, char **argv) {
     // ========================================================================
     // INTEGRACIÓN COMPLETA DEL SISTEMA BACKEND
     // ========================================================================
-    
-    // Configurar TODOS los callbacks con el sistema integrado completo
+      // Configurar TODOS los callbacks con el sistema integrado completo
     gui_set_scan_callbacks(
         gui_compatible_scan_usb,        // USB totalmente integrado
         gui_compatible_scan_processes,  // Procesos totalmente integrado
         gui_compatible_scan_ports,      // Puertos totalmente integrado
-        NULL   // Export callback - se mantiene como está por ahora
+        gui_export_report_to_pdf        // Export callback - funcionalidad completa implementada
     );
     
     gtk_widget_show_all(main_window);

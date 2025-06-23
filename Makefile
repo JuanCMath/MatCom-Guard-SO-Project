@@ -1,6 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -g -Iinclude -DDEBUG
 GTK_FLAGS = `pkg-config --cflags --libs gtk+-3.0`
+CAIRO_FLAGS = `pkg-config --cflags --libs cairo cairo-pdf`
 LIBS = -lcrypto -lpthread -ludev
 
 TARGET = matcom-guard
@@ -27,7 +28,7 @@ SRC = src/main.c \
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(GTK_FLAGS) $(LIBS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(GTK_FLAGS) $(CAIRO_FLAGS) $(LIBS)
 
 clean:
 	rm -f $(TARGET) *.o
