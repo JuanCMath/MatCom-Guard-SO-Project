@@ -55,12 +55,12 @@ void update_process(ProcessInfo info, int idx);
 void clear_process_list();
 void show_process_stats();
 
-// Funciones para manejo de valores previos (si necesitas persistencia)
+// Funciones para manejo de valores previos
 void read_prev_times(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time);
 void write_prev_times(pid_t pid, unsigned long prev_user_time, unsigned long prev_sys_time);
 
 // Funciones de cálculo de CPU
-float total_cpu_usage(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time);
+float total_cpu_usage(pid_t pid);
 float interval_cpu_usage(pid_t pid);
 
 // Funciones auxiliares para información de procesos
@@ -73,6 +73,10 @@ int process_exists(pid_t pid);
 int is_process_whitelisted(const char *process_name);
 void check_and_update_alert_status(ProcessInfo *info);
 void clear_alert_if_needed(ProcessInfo *info);
+
+// Funciones de limpieza de archivos temporales
+void cleanup_temp_files();
+void cleanup_stale_temp_files();
 
 // Variables globales externas
 extern ActiveProcess *procesos_activos;

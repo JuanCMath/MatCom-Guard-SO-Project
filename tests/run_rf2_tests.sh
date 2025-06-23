@@ -1,13 +1,133 @@
 #!/bin/bash
 
-# Script para ejecutar casos de prueba del RF2 - Monitoreo de Recursos
-# Autor: Sistema de Pruebas MatCom Guard
-# Fecha: $(date)
+# ================================================================================
+# SCRIPT DE PRUEBAS RF2 - MATCOM GUARD
+# ================================================================================
+# Prueba los 4 casos principales del sistema de monitoreo:
+# 1. Proceso legítimo (lista blanca)
+# 2. Proceso malicioso (alto CPU)
+# 3. Fuga de memoria (alto RAM)
+# 4. Proceso fantasma (limpieza)
+# ================================================================================
 
-set -e
+# Configuración
+SCRIPT_DIR="/media/sf_ProyectoSO/MatCom-Guard-SO-Project"
+MONITOR_EXEC="$SCRIPT_DIR/process_monitor_gui"
+CONFIG_FILE="$SCRIPT_DIR/matcomguard.conf"
+INFORME_FILE="$SCRIPT_DIR/informe_pruebas_rf2.txt"
+LOG_FILE="$SCRIPT_DIR/monitor_test.log"
 
-echo "=== CASOS DE PRUEBA RF2 - MONITOREO DE RECURSOS ==="
-echo "Iniciando pruebas del sistema de monitoreo..."
+# Colores para output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ================================================================================
+# FUNCIONES AUXILIARES
+# ================================================================================
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$INFORME_FILE"
+}
+
+log_success() {
+    echo -e "${GREEN}[✓]${NC} $1" | tee -a "$INFORME_FILE"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[⚠]${NC} $1" | tee -a "$INFORME_FILE"
+}
+
+log_error() {
+    echo -e "${RED}[✗]${NC} $1" | tee -a "$INFORME_FILE"
+}
+
+log_test() {
+    echo -e "\n${YELLOW}=== $1 ===${NC}" | tee -a "$INFORME_FILE"
+}
+
+# Función para configurar umbrales de prueba
+setup_test_config() {
+    log_info "Configurando umbrales para pruebas..."
+    cat > "$CONFIG_FILE" << EOF
+# Configuración MatCom Guard - RF2 (PRUEBAS)
+# Umbrales de recursos (en porcentaje)
+UMBRAL_CPU=70.0
+UMBRAL_RAM=50.0
+
+# Intervalo entre verificaciones (en segundos)
+INTERVALO=5
+
+# Duración para activar alerta (en segundos)
+DURACION_ALERTA=10
+
+# Lista de procesos exentos de alertas (separados por comas)
+WHITELIST=systemd,kthreadd,ksoftirqd,migration,rcu_gp,rcu_par_gp,watchdog,stress,yes
+EOF
+    log_success "Configuración establecida: CPU=70%, RAM=50%, Lista blanca incluye 'stress' y 'yes'"
+}
+
+# Función para iniciar monitor en background
+start_monitor() {
+    log_info "Iniciando monitor de procesos..."
+    cd "$SCRIPT_DIR"
+    nohup "$MONITOR_EXEC" > "$LOG_FILE" 2>&1 &
+    MONITOR_PID=$!
+    sleep 3
+    
+    if ps -p $MONITOR_PID > /dev/null 2>&1; then
+        log_success "Monitor iniciado con PID: $MONITOR_PID"
+        return 0
+    else
+        log_error "Error al iniciar el monitor"
+        return 1
+    fi
+}
+
+# Función para detener monitor
+stop_monitor() {
+    if [ ! -z "$MONITOR_PID" ] && ps -p $MONITOR_PID > /dev/null 2>&1; then
+        log_info "Deteniendo monitor (PID: $MONITOR_PID)..."
+        kill $MONITOR_PID
+        sleep 2
+        
+        if ps -p $MONITOR_PID > /dev/null 2>&1; then
+            kill -9 $MONITOR_PID 2>/dev/null
+        fi
+        log_success "Monitor detenido"
+    fi
+}
+
+# Función para verificar alertas en el log
+check_alerts() {
+    local expected_process="$1"
+    local expected_type="$2"  # "CPU" o "RAM"
+    local should_alert="$3"   # "SI" o "NO"
+    
+    sleep 8  # Esperar tiempo suficiente para que se genere la alerta
+    
+    local alerts_found=$(grep -i "alerta" "$LOG_FILE" | grep -i "$expected_process" | grep -i "$expected_type" | wc -l)
+    
+    if [ "$should_alert" = "SI" ]; then
+        if [ $alerts_found -gt 0 ]; then
+            log_success "✓ Alerta detectada correctamente para '$expected_process' ($expected_type)"
+            grep -i "alerta" "$LOG_FILE" | grep -i "$expected_process" | grep -i "$expected_type" | tail -1 >> "$INFORME_FILE"
+        else
+            log_error "✗ No se detectó alerta esperada para '$expected_process' ($expected_type)"
+        fi
+    else
+        if [ $alerts_found -eq 0 ]; then
+            log_success "✓ No hay alertas (correcto, proceso en lista blanca)"
+        else
+            log_warning "⚠ Se detectó alerta inesperada para proceso en lista blanca"
+            grep -i "alerta" "$LOG_FILE" | grep -i "$expected_process" | tail -1 >> "$INFORME_FILE"
+        fi
+    fi
+    
+    return $alerts_found
+}
 echo
 
 # Colores para output

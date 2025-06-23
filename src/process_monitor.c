@@ -396,6 +396,10 @@ void cleanup_monitoring() {
     event_callbacks = NULL;
     pthread_mutex_unlock(&mutex);
     
+    // Limpiar archivos temporales corruptos
+    cleanup_stale_temp_files();
+    cleanup_temp_files();
+    
     pthread_mutex_destroy(&mutex);
     printf("[INFO] Recursos de monitoreo liberados\n");
 }

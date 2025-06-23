@@ -14,8 +14,15 @@ matcom-guard: $(SRC)
 process_monitor_gui: src/process_monitor_gui.c src/process_monitor.c src/auxiliar_methods.c
 	$(CC) -Wall -Wextra -Iinclude -o $@ $^ -lpthread
 
-test-monitoring: example
+# Compilar test específico de RF2
+rf2_test: src/rf2_test.c src/process_monitor.c src/auxiliar_methods.c
+	$(CC) -Wall -Wextra -Iinclude -o $@ $^ -lpthread
+
+test-monitoring: process_monitor_gui
 	./process_monitor_gui
 
+test-rf2: rf2_test
+	./rf2_test
+
 clean:
-	rm -f matcom-guard process_monitor_gui
+	rm -f matcom-guard process_monitor_gui rf2_test

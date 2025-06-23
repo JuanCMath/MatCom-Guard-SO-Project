@@ -43,16 +43,16 @@ int read_proc_stat(pid_t pid, ProcStat *stat) {
     char stat_path[256];
     sprintf(stat_path, "/proc/%d/stat", pid);
     FILE *fp = fopen(stat_path, "r");
-    if (!fp) return -1;
-
+    if (!fp) return -1;    
+    
     // Leer los campos 14 (utime), 15 (stime), 22 (starttime)
     int scanned = fscanf(fp,
-        "%*d "      // pid
-        "%*s "      // comm
-        "%*c "      // state
-        "%*d %*d %*d %*d %*d "
-        "%*u %*u %*u %*u %*u "
-        "%lu %lu %*d %*d %*d %*d %*d %*d %*u %*u %*d %*u %lu",
+        "%*d "      // pid (campo 1)
+        "%*s "      // comm (campo 2)
+        "%*c "      // state (campo 3)
+        "%*d %*d %*d %*d %*d "  // campos 4-8
+        "%*u %*u %*u %*u %*u "  // campos 9-13
+        "%lu %lu %*ld %*ld %*ld %*ld %*ld %*ld %lu",  // campos 14, 15, 16-21, 22
         &stat->utime, &stat->stime, &stat->starttime);
 
     fclose(fp);
@@ -147,6 +147,144 @@ void get_process_name(pid_t pid, char *name, size_t size) {
     snprintf(name, size, "unknown_%d", pid);
 }
 
+// ===== FUNCIONES DE PERSISTENCIA DE DATOS =====
+
+/**
+ * @brief Genera la ruta del archivo de estadísticas de un proceso
+ * @param pid PID del proceso
+ * @param path Buffer donde almacenar la ruta
+ * @param size Tamaño del buffer
+ */
+void get_stat_file_path(pid_t pid, char *path, size_t size) {
+    snprintf(path, size, "/tmp/procstat_%d.dat", pid);
+}
+
+/**
+ * @brief Lee los tiempos previos de CPU de un proceso
+ * @param pid PID del proceso
+ * @param prev_user_time Puntero donde almacenar tiempo de usuario previo
+ * @param prev_sys_time Puntero donde almacenar tiempo de sistema previo
+ */
+void read_prev_times(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time) {
+    char path[64];
+    get_stat_file_path(pid, path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (f) {
+        int scanned = fscanf(f, "%lu %lu", prev_user_time, prev_sys_time);
+        fclose(f);
+        
+        // Si no se pudieron leer ambos valores, inicializar a 0
+        if (scanned != 2) {
+            *prev_user_time = 0;
+            *prev_sys_time = 0;
+        }
+    } else {
+        *prev_user_time = 0;
+        *prev_sys_time = 0;
+    }
+}
+
+/**
+ * @brief Escribe los tiempos previos de CPU de un proceso
+ * @param pid PID del proceso
+ * @param prev_user_time Tiempo de usuario a guardar
+ * @param prev_sys_time Tiempo de sistema a guardar
+ */
+void write_prev_times(pid_t pid, unsigned long prev_user_time, unsigned long prev_sys_time) {
+    char path[64];
+    get_stat_file_path(pid, path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "%lu %lu\n", prev_user_time, prev_sys_time);
+        fclose(f);
+    }
+}
+
+// ===== FUNCIONES DE CÁLCULO DE CPU Y MEMORIA =====
+
+/**
+ * @brief Calcula el uso total de CPU de un proceso desde su inicio
+ * @param pid PID del proceso
+ * @param prev_user_time Puntero a tiempo de usuario previo
+ * @param prev_sys_time Puntero a tiempo de sistema previo
+ * @return Porcentaje de uso de CPU
+ */
+float total_cpu_usage(pid_t pid) {
+    ProcStat stat;
+    if (read_proc_stat(pid, &stat) != 0) return 0.0;
+    
+    // Obtener uptime del sistema en segundos
+    FILE *uptime_fp = fopen("/proc/uptime", "r");
+    if (!uptime_fp) return 0.0;
+    double system_uptime_seconds = 0.0;
+    fscanf(uptime_fp, "%lf", &system_uptime_seconds);
+    fclose(uptime_fp);
+
+    long clk_tck = sysconf(_SC_CLK_TCK);
+    
+    // Calcular tiempo que el proceso ha estado vivo en segundos
+    double process_start_time_seconds = stat.starttime / (double)clk_tck;
+    double process_uptime_seconds = system_uptime_seconds - process_start_time_seconds;
+    
+    if (process_uptime_seconds <= 0) return 0.0;
+    
+    // Convertir tiempo de CPU usado a segundos
+    double cpu_time_seconds = (stat.utime + stat.stime) / (double)clk_tck;
+    
+    // Calcular porcentaje: (tiempo_cpu_usado / tiempo_vida_proceso) * 100
+    // NOTA: En sistemas multi-core, esto puede ser > 100% para procesos multihilo
+    return (float)(100.0 * (cpu_time_seconds / process_uptime_seconds));
+}
+
+/**
+ * @brief Calcula el uso de CPU de un proceso en el último intervalo
+ * @param pid PID del proceso
+ * @return Porcentaje de uso de CPU en el intervalo
+ */
+float interval_cpu_usage(pid_t pid) {
+    ProcStat stat;
+    if (read_proc_stat(pid, &stat) != 0) return 0.0;
+
+    unsigned long prev_user_time = 0, prev_sys_time = 0;
+    read_prev_times(pid, &prev_user_time, &prev_sys_time);
+
+    // Inicializar y Verificar consistencia de datos (proceso reiniciado, overflow, etc.)
+    if ((prev_user_time == 0 && prev_sys_time == 0) ||               // Si es la primera medición (no hay datos previos)
+        (stat.utime < prev_user_time || stat.stime <  prev_sys_time) // Proceso posiblemente reiniciado o datos inconsistentes
+    )
+    {
+        write_prev_times(pid, stat.utime, stat.stime);
+        return total_cpu_usage(pid);  // No hay delta válido, calcula el uso del cpu desde que comenzo el proceso.
+    }    
+    
+    unsigned long delta_user = stat.utime - prev_user_time;
+    unsigned long delta_sys = stat.stime - prev_sys_time;
+    unsigned long delta_total = delta_user + delta_sys;
+    long clk_tck = sysconf(_SC_CLK_TCK);
+
+    // Guardar tiempos actuales para próxima medición
+    write_prev_times(pid, stat.utime, stat.stime);
+
+    // Calcular porcentaje de CPU
+    // IMPORTANTE: En sistemas multi-core, >100% es NORMAL para procesos multihilo
+    // Un proceso con N hilos puede usar hasta N*100% CPU
+    double cpu_percentage = 100.0 * (delta_total / ((double)clk_tck * config.check_interval));
+    
+    // Detectar valores extremadamente altos que indican problemas de datos
+    long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    double max_theoretical_cpu = num_cores * 100.0;
+    
+    if (cpu_percentage > max_theoretical_cpu) {
+        // Valor superior al 100% del máximo teórico, probablemente error
+        fprintf(stderr, "[WARNING] PID %d: CPU calculation suspicious: %.2f%% "
+                "(max theoretical: %.2f%% for %ld cores)\n", 
+                pid, cpu_percentage, max_theoretical_cpu, num_cores);
+        return total_cpu_usage(pid);
+    }
+    
+    return (float)cpu_percentage;
+}
+
 /**
  * @brief Obtiene el uso de memoria del proceso en porcentaje
  * @param pid PID del proceso
@@ -174,112 +312,14 @@ float get_process_memory_usage(pid_t pid) {
     unsigned long total_mem = get_total_system_memory();
     if (total_mem == 0) return 0.0;
     
-    return (float)(100.0 * vmrss / total_mem);
-}
-
-// ===== FUNCIONES DE PERSISTENCIA DE DATOS =====
-
-/**
- * @brief Genera la ruta del archivo de estadísticas de un proceso
- * @param pid PID del proceso
- * @param path Buffer donde almacenar la ruta
- * @param size Tamaño del buffer
- */
-void get_stat_file_path(pid_t pid, char *path, size_t size) {
-    snprintf(path, size, "/tmp/procstat_%d.dat", pid);
-}
-
-/**
- * @brief Lee los tiempos previos de CPU de un proceso
- * @param pid PID del proceso
- * @param prev_user_time Puntero donde almacenar tiempo de usuario previo
- * @param prev_sys_time Puntero donde almacenar tiempo de sistema previo
- */
-void read_prev_times(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time) {
-    char path[64];
-    get_stat_file_path(pid, path, sizeof(path));
-    FILE *f = fopen(path, "r");
-    if (f) {
-        fscanf(f, "%lu %lu", prev_user_time, prev_sys_time);
-        fclose(f);
-    } else {
-        *prev_user_time = 0;
-        *prev_sys_time = 0;
-    }
-}
-
-/**
- * @brief Escribe los tiempos previos de CPU de un proceso
- * @param pid PID del proceso
- * @param prev_user_time Tiempo de usuario a guardar
- * @param prev_sys_time Tiempo de sistema a guardar
- */
-void write_prev_times(pid_t pid, unsigned long prev_user_time, unsigned long prev_sys_time) {
-    char path[64];
-    get_stat_file_path(pid, path, sizeof(path));
-    FILE *f = fopen(path, "w");
-    if (f) {
-        fprintf(f, "%lu %lu\n", prev_user_time, prev_sys_time);
-        fclose(f);
-    }
-}
-
-// ===== FUNCIONES DE CÁLCULO DE CPU =====
-
-/**
- * @brief Calcula el uso total de CPU de un proceso desde su inicio
- * @param pid PID del proceso
- * @param prev_user_time Puntero a tiempo de usuario previo
- * @param prev_sys_time Puntero a tiempo de sistema previo
- * @return Porcentaje de uso de CPU
- */
-float total_cpu_usage(pid_t pid, unsigned long *prev_user_time, unsigned long *prev_sys_time) {
-    ProcStat stat;
-    if (read_proc_stat(pid, &stat) != 0) return 0.0;
-
-    // Inicializar los tiempos previos si es la primera vez
-    if (*prev_sys_time == 0 && *prev_user_time == 0) {
-        *prev_sys_time = stat.stime;
-        *prev_user_time = stat.utime;
-        return 0.0;
-    } else {
-        *prev_sys_time = stat.stime;
-        *prev_user_time = stat.utime;
+    float mem_percentage = (float)(100.0 * vmrss / total_mem);
+    
+    // Validación: la memoria nunca debería exceder 100%
+    if (mem_percentage > 100.0) {
+        return 100.0; // Valor sospechoso, retornar 100 para lanzar la alerta
     }
     
-    FILE *uptime_fp = fopen("/proc/uptime", "r");
-    if (!uptime_fp) return 0.0;
-    double uptime = 0.0;
-    fscanf(uptime_fp, "%lf", &uptime);
-    fclose(uptime_fp);
-
-    long clk_tck = sysconf(_SC_CLK_TCK);
-    double seconds = uptime - (stat.starttime / (double)clk_tck);
-    if (seconds <= 0) return 0.0;
-    
-    return (float)(100.0 * ((stat.utime + stat.stime) / ((double)clk_tck * seconds)));
-}
-
-/**
- * @brief Calcula el uso de CPU de un proceso en el último intervalo
- * @param pid PID del proceso
- * @return Porcentaje de uso de CPU en el intervalo
- */
-float interval_cpu_usage(pid_t pid) {
-    ProcStat stat;
-    if (read_proc_stat(pid, &stat) != 0) return 0.0;
-
-    unsigned long prev_user_time = 0, prev_sys_time = 0;
-    read_prev_times(pid, &prev_user_time, &prev_sys_time);
-
-    unsigned long delta_user = stat.utime - prev_user_time;
-    unsigned long delta_sys = stat.stime - prev_sys_time;
-    unsigned long delta_total = delta_user + delta_sys;
-    long clk_tck = sysconf(_SC_CLK_TCK);
-
-    write_prev_times(pid, stat.utime, stat.stime);
-  
-    return (float)(100.0 * (delta_total / ((double)clk_tck * config.check_interval)));
+    return mem_percentage;
 }
 
 // ===== FUNCIONES DE GESTIÓN DE LISTA DE PROCESOS ACTIVOS =====
@@ -391,6 +431,36 @@ void show_process_stats() {
     printf("Procesos con alta CPU: %d\n", alertas_cpu);
     printf("Procesos con alta memoria: %d\n", alertas_mem);
     printf("=========================================\n\n");
+}
+
+/**
+ * @brief Limpia archivos temporales de estadísticas de procesos
+ * Se ejecuta al finalizar el monitoreo para evitar datos corruptos
+ */
+void cleanup_temp_files() {
+    printf("[INFO] Limpiando archivos temporales de estadísticas...\n");
+    
+    // Eliminar archivos temporales del directorio /tmp
+    int result = system("rm -f /tmp/procstat_*.dat 2>/dev/null");
+    if (result == 0) {
+        printf("[INFO] Archivos temporales limpiados exitosamente\n");
+    } else {
+        printf("[WARNING] No se pudieron limpiar algunos archivos temporales\n");
+    }
+}
+
+/**
+ * @brief Limpia archivos temporales antiguos (más de 1 día)
+ * Útil para mantenimiento automático del sistema
+ */
+void cleanup_stale_temp_files() {
+    printf("[INFO] Limpiando archivos temporales antiguos...\n");
+
+    if (system("find /tmp -name 'procstat_*.dat' -mtime +1 -delete 2>/dev/null") == 0) {
+        printf("[INFO] Archivos temporales limpiados exitosamente\n");
+    } else {
+        printf("[WARNING] No se pudieron limpiar algunos archivos temporales viejos\n");
+    }
 }
 
 // ===== FIN MÉTODOS AUXILIARES PARA MANEJO DE PROCESOS ACTIVOS=====
