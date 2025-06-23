@@ -166,45 +166,378 @@ static void on_scan_processes_clicked(GtkButton *button, gpointer data) {
     printf("=== FIN DIAGNÓSTICO - Timer configurado ===\n");
 }
 
-// Callback para terminar un proceso
+// Estructura para manejar operaciones de terminación asíncronas
+typedef struct {
+    pid_t target_pid;           // PID del proceso a terminar
+    char process_name[256];     // Nombre del proceso para logging
+    int attempts_made;          // Número de intentos realizados
+    time_t start_time;          // Cuándo comenzó el intento de terminación
+    GtkTreeIter tree_iter;      // Iterador para remover de la GUI si es exitoso
+    gboolean iter_valid;        // Si el iterador sigue siendo válido
+} ProcessTerminationContext;
+
+// Función auxiliar para verificar si un proceso sigue vivo
+static gboolean is_process_still_alive(pid_t pid) {
+    // Enviar señal 0 (no hace nada) solo para verificar si el proceso existe
+    // Si kill() retorna 0, el proceso existe. Si retorna -1 con errno=ESRCH, no existe.
+    int result = kill(pid, 0);
+    
+    if (result == 0) {
+        return TRUE;  // El proceso sigue vivo
+    } else if (errno == ESRCH) {
+        return FALSE; // El proceso ya no existe (No such process)
+    } else {
+        // Otros errores (como EPERM - sin permisos) indican que el proceso existe
+        // pero no tenemos permisos para afectarlo
+        return TRUE;
+    }
+}
+
+// Función para realizar un intento escalado de terminación
+static gint attempt_process_termination(pid_t pid, const char* process_name, int attempt_number) {
+    int signal_to_send;
+    const char* signal_name;
+    
+    /*
+     * ESTRATEGIA DE TERMINACIÓN ESCALADA:
+     * 
+     * Intento 1: SIGTERM (15) - Terminación amigable
+     *   - Le dice al proceso "por favor termina limpiamente"
+     *   - El proceso puede limpiar recursos, guardar datos, etc.
+     *   - Algunos procesos pueden ignorar esta señal
+     * 
+     * Intento 2: SIGINT (2) - Interrupción (Ctrl+C)
+     *   - Similar a cuando presionas Ctrl+C en la terminal
+     *   - Algunos procesos responden mejor a esta señal
+     * 
+     * Intento 3: SIGKILL (9) - Terminación forzada
+     *   - El kernel mata el proceso inmediatamente
+     *   - No puede ser ignorada ni bloqueada
+     *   - Último recurso porque no permite limpieza
+     */
+    
+    switch (attempt_number) {
+        case 1:
+            signal_to_send = SIGTERM;
+            signal_name = "SIGTERM (terminación amigable)";
+            break;
+        case 2:
+            signal_to_send = SIGINT;
+            signal_name = "SIGINT (interrupción)";
+            break;
+        case 3:
+            signal_to_send = SIGKILL;
+            signal_name = "SIGKILL (terminación forzada)";
+            break;
+        default:
+            gui_add_log_entry("PROCESS_KILLER", "ERROR", 
+                             "Número de intento inválido en terminación de proceso");
+            return -1;
+    }
+    
+    // Registrar el intento que vamos a realizar
+    char attempt_msg[512];
+    snprintf(attempt_msg, sizeof(attempt_msg), 
+             "Intento %d de terminar proceso '%s' (PID: %d) usando %s",
+             attempt_number, process_name, pid, signal_name);
+    gui_add_log_entry("PROCESS_KILLER", "INFO", attempt_msg);
+    
+    // Enviar la señal al proceso
+    int result = kill(pid, signal_to_send);
+    
+    if (result == 0) {
+        // La señal fue enviada exitosamente
+        char success_msg[512];
+        snprintf(success_msg, sizeof(success_msg), 
+                 "Señal %s enviada exitosamente a proceso '%s' (PID: %d)",
+                 signal_name, process_name, pid);
+        gui_add_log_entry("PROCESS_KILLER", "INFO", success_msg);
+        return 0;
+    } else {
+        // Error al enviar la señal
+        char error_msg[512];
+        const char* error_description = strerror(errno);
+        
+        if (errno == ESRCH) {
+            snprintf(error_msg, sizeof(error_msg), 
+                     "Proceso '%s' (PID: %d) ya no existe - posiblemente terminó por sí mismo",
+                     process_name, pid);
+            gui_add_log_entry("PROCESS_KILLER", "INFO", error_msg);
+            return 1; // Código especial: proceso ya no existe
+        } else if (errno == EPERM) {
+            snprintf(error_msg, sizeof(error_msg), 
+                     "Sin permisos para terminar proceso '%s' (PID: %d) - proceso del sistema o de otro usuario",
+                     process_name, pid);
+            gui_add_log_entry("PROCESS_KILLER", "ERROR", error_msg);
+        } else {
+            snprintf(error_msg, sizeof(error_msg), 
+                     "Error al enviar %s a proceso '%s' (PID: %d): %s",
+                     signal_name, process_name, pid, error_description);
+            gui_add_log_entry("PROCESS_KILLER", "ERROR", error_msg);
+        }
+        
+        return -1;
+    }
+}
+
+// Callback que se ejecuta periódicamente para verificar si el proceso terminó
+static gboolean check_process_termination_status(gpointer user_data) {
+    ProcessTerminationContext *context = (ProcessTerminationContext*)user_data;
+    
+    if (!context) {
+        gui_add_log_entry("PROCESS_KILLER", "ERROR", "Contexto de terminación nulo");
+        return G_SOURCE_REMOVE; // Detener el timer
+    }
+    
+    // Verificar si el proceso sigue vivo
+    gboolean still_alive = is_process_still_alive(context->target_pid);
+    
+    if (!still_alive) {
+        // ¡Éxito! El proceso terminó
+        char success_msg[512];
+        time_t total_time = time(NULL) - context->start_time;
+        snprintf(success_msg, sizeof(success_msg), 
+                 "✅ Proceso '%s' (PID: %d) terminado exitosamente después de %d intento(s) en %ld segundos",
+                 context->process_name, context->target_pid, 
+                 context->attempts_made, total_time);
+        gui_add_log_entry("PROCESS_KILLER", "INFO", success_msg);
+        
+        // Remover el proceso de la GUI solo cuando realmente haya terminado
+        if (context->iter_valid && process_list_store) {
+            gtk_list_store_remove(process_list_store, &context->tree_iter);
+        }
+        
+        // Limpiar el contexto y detener el timer
+        free(context);
+        return G_SOURCE_REMOVE;
+    }
+    
+    // El proceso sigue vivo - verificar si debemos hacer otro intento
+    time_t elapsed_time = time(NULL) - context->start_time;
+    
+    // Dar tiempo para que cada señal tenga efecto antes del siguiente intento
+    const int WAIT_TIME_BETWEEN_ATTEMPTS = 3; // segundos
+    const int MAX_WAIT_TIME = 15; // segundos máximos antes de abandonar
+    
+    if (elapsed_time >= MAX_WAIT_TIME) {
+        // Hemos esperado demasiado - abandonar
+        char failure_msg[512];
+        snprintf(failure_msg, sizeof(failure_msg), 
+                 "❌ Fallo al terminar proceso '%s' (PID: %d) después de %d intento(s) y %ld segundos",
+                 context->process_name, context->target_pid, 
+                 context->attempts_made, elapsed_time);
+        gui_add_log_entry("PROCESS_KILLER", "ERROR", failure_msg);
+        
+        // Mostrar mensaje al usuario sobre el fallo
+        char user_msg[512];
+        snprintf(user_msg, sizeof(user_msg), 
+                 "No se pudo terminar el proceso '%s' (PID: %d).\n"
+                 "El proceso puede ser crítico del sistema o requerir permisos administrativos.",
+                 context->process_name, context->target_pid);
+        
+        GtkWidget *error_dialog = gtk_message_dialog_new(GTK_WINDOW(main_window),
+                                                        GTK_DIALOG_MODAL,
+                                                        GTK_MESSAGE_ERROR,
+                                                        GTK_BUTTONS_OK,
+                                                        "%s", user_msg);
+        gtk_dialog_run(GTK_DIALOG(error_dialog));
+        gtk_widget_destroy(error_dialog);
+        
+        free(context);
+        return G_SOURCE_REMOVE;
+    }
+    
+    // Verificar si es tiempo de hacer otro intento
+    if (elapsed_time >= (context->attempts_made * WAIT_TIME_BETWEEN_ATTEMPTS) && 
+        context->attempts_made < 3) {
+        
+        context->attempts_made++;
+        
+        char retry_msg[256];
+        snprintf(retry_msg, sizeof(retry_msg), 
+                 "Proceso '%s' (PID: %d) sigue vivo después de %ld segundos - escalando a intento %d",
+                 context->process_name, context->target_pid, elapsed_time, context->attempts_made);
+        gui_add_log_entry("PROCESS_KILLER", "WARNING", retry_msg);
+        
+        // Hacer el siguiente intento con una señal más fuerte
+        int result = attempt_process_termination(context->target_pid, 
+                                                context->process_name, 
+                                                context->attempts_made);
+        
+        if (result == 1) {
+            // El proceso ya no existe (caso especial)
+            free(context);
+            return G_SOURCE_REMOVE;
+        }
+    }
+    
+    // Continuar verificando
+    return G_SOURCE_CONTINUE;
+}
+
+// FUNCIÓN PRINCIPAL MEJORADA para terminar procesos
 static void on_kill_process_clicked(GtkButton *button, gpointer data) {
     GtkTreeSelection *selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(process_tree_view));
     GtkTreeIter iter;
     GtkTreeModel *model;
     
-    if (gtk_tree_selection_get_selected(selection, &model, &iter)) {
-        gint pid;
-        gchar *name;
-        gtk_tree_model_get(model, &iter,
-                          COL_PROC_PID, &pid,
-                          COL_PROC_NAME, &name,
-                          -1);
-        
-        // Crear diálogo de confirmación
-        GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(main_window),
-                                                  GTK_DIALOG_MODAL,
-                                                  GTK_MESSAGE_WARNING,
-                                                  GTK_BUTTONS_YES_NO,
-                                                  "¿Está seguro de que desea terminar el proceso '%s' (PID: %d)?",
-                                                  name, pid);
-        
-        int response = gtk_dialog_run(GTK_DIALOG(dialog));
-        if (response == GTK_RESPONSE_YES) {
-            char log_msg[256];
-            snprintf(log_msg, sizeof(log_msg), "Intentando terminar proceso '%s' (PID: %d)", name, pid);
-            gui_add_log_entry("PROCESS_MANAGER", "WARNING", log_msg);
-            
-            // Aquí iría el código real para terminar el proceso
-            // Por ahora, solo simulamos
-            gtk_list_store_remove(process_list_store, &iter);
-            
-            snprintf(log_msg, sizeof(log_msg), "Proceso '%s' terminado exitosamente", name);
-            gui_add_log_entry("PROCESS_MANAGER", "INFO", log_msg);
-        }
-        
-        gtk_widget_destroy(dialog);
-        g_free(name);
+    if (!gtk_tree_selection_get_selected(selection, &model, &iter)) {
+        gui_add_log_entry("PROCESS_KILLER", "WARNING", "No hay proceso seleccionado para terminar");
+        return;
     }
+    
+    gint pid;
+    gchar *name;
+    gtk_tree_model_get(model, &iter,
+                      COL_PROC_PID, &pid,
+                      COL_PROC_NAME, &name,
+                      -1);
+    
+    // Verificar que el proceso sigue existiendo antes de intentar terminarlo
+    if (!is_process_still_alive(pid)) {
+        char already_dead_msg[256];
+        snprintf(already_dead_msg, sizeof(already_dead_msg), 
+                 "El proceso '%s' (PID: %d) ya no está en ejecución", name, pid);
+        gui_add_log_entry("PROCESS_KILLER", "INFO", already_dead_msg);
+        
+        // Remover de la GUI ya que no existe
+        gtk_list_store_remove(process_list_store, &iter);
+        g_free(name);
+        return;
+    }
+    
+    // Verificar si el sistema está pausado
+    if (is_system_paused()) {
+        GtkWidget *paused_dialog = gtk_message_dialog_new(GTK_WINDOW(main_window),
+                                                         GTK_DIALOG_MODAL,
+                                                         GTK_MESSAGE_INFO,
+                                                         GTK_BUTTONS_OK,
+                                                         "El sistema está pausado.\n\n"
+                                                         "Para terminar procesos, primero reactive el monitoreo.");
+        gtk_dialog_run(GTK_DIALOG(paused_dialog));
+        gtk_widget_destroy(paused_dialog);
+        g_free(name);
+        return;
+    }
+    
+    // === DIÁLOGO DE CONFIRMACIÓN CON INFORMACIÓN DE SEGURIDAD ===
+    char confirmation_msg[1024];
+    snprintf(confirmation_msg, sizeof(confirmation_msg),
+             "¿Está seguro de que desea terminar el proceso '%s' (PID: %d)?\n\n"
+             "ADVERTENCIA:\n"
+             "• Terminar procesos del sistema puede causar inestabilidad\n"
+             "• Los datos no guardados se perderán\n"
+             "• Algunos procesos pueden requerir permisos administrativos\n\n"
+             "MatCom Guard intentará terminación amigable primero, "
+             "escalando a terminación forzada si es necesario.",
+             name, pid);
+    
+    GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(main_window),
+                                              GTK_DIALOG_MODAL,
+                                              GTK_MESSAGE_WARNING,
+                                              GTK_BUTTONS_YES_NO,
+                                              "%s", confirmation_msg);
+    
+    gtk_window_set_title(GTK_WINDOW(dialog), "Confirmar Terminación de Proceso");
+    
+    int response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+    
+    if (response != GTK_RESPONSE_YES) {
+        gui_add_log_entry("PROCESS_KILLER", "INFO", "Terminación de proceso cancelada por el usuario");
+        g_free(name);
+        return;
+    }
+    
+    // === INICIAR PROCESO DE TERMINACIÓN ASÍNCRONA ===
+    
+    // Crear contexto para el seguimiento asíncrono
+    ProcessTerminationContext *context = malloc(sizeof(ProcessTerminationContext));
+    if (!context) {
+        gui_add_log_entry("PROCESS_KILLER", "ERROR", "Error al asignar memoria para contexto de terminación");
+        g_free(name);
+        return;
+    }
+    
+    // Configurar el contexto
+    context->target_pid = pid;
+    strncpy(context->process_name, name, sizeof(context->process_name) - 1);
+    context->process_name[sizeof(context->process_name) - 1] = '\0';
+    context->attempts_made = 1;
+    context->start_time = time(NULL);
+    context->tree_iter = iter;
+    context->iter_valid = TRUE;
+    
+    char start_msg[512];
+    snprintf(start_msg, sizeof(start_msg), 
+             "🎯 Iniciando terminación de proceso '%s' (PID: %d) con estrategia escalada",
+             name, pid);
+    gui_add_log_entry("PROCESS_KILLER", "INFO", start_msg);
+    
+    // Hacer el primer intento (SIGTERM amigable)
+    int initial_result = attempt_process_termination(pid, name, 1);
+    
+    if (initial_result == 1) {
+        // El proceso ya no existe
+        char already_gone_msg[256];
+        snprintf(already_gone_msg, sizeof(already_gone_msg), 
+                 "Proceso '%s' (PID: %d) ya no existe - removiendo de la lista", name, pid);
+        gui_add_log_entry("PROCESS_KILLER", "INFO", already_gone_msg);
+        gtk_list_store_remove(process_list_store, &iter);
+        free(context);
+        g_free(name);
+        return;
+    } else if (initial_result == -1) {
+        // Error en el primer intento
+        free(context);
+        g_free(name);
+        return;
+    }
+    
+    // Configurar timer para verificar el progreso cada segundo
+    // Este timer verificará si el proceso terminó y escalará la terminación si es necesario
+    g_timeout_add_seconds(1, check_process_termination_status, context);
+    
+    // Deshabilitar temporalmente el botón para evitar múltiples intentos simultáneos
+    gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
+    
+    // Re-habilitar el botón después de un tiempo razonable
+    g_timeout_add_seconds(20, (GSourceFunc)gtk_widget_set_sensitive, 
+                         GINT_TO_POINTER(TRUE));
+    
+    g_free(name);
+}
+
+// ===========================================================================
+// FUNCIÓN AUXILIAR PARA VALIDAR PERMISOS DE TERMINACIÓN
+// ===========================================================================
+
+/**
+ * Esta función verifica si tenemos permisos para terminar un proceso específico
+ * antes de intentarlo. Esto ayuda a proporcionar mejor feedback al usuario.
+ */
+static gboolean can_terminate_process(pid_t pid, const char* process_name) {
+    // Intentar enviar señal 0 (que no hace nada) para verificar permisos
+    int result = kill(pid, 0);
+    
+    if (result == 0) {
+        return TRUE; // Tenemos permisos
+    } else if (errno == EPERM) {
+        char perm_msg[512];
+        snprintf(perm_msg, sizeof(perm_msg), 
+                 "Sin permisos para terminar proceso '%s' (PID: %d) - proceso del sistema o de otro usuario",
+                 process_name, pid);
+        gui_add_log_entry("PROCESS_KILLER", "WARNING", perm_msg);
+        return FALSE;
+    } else if (errno == ESRCH) {
+        char not_exist_msg[256];
+        snprintf(not_exist_msg, sizeof(not_exist_msg), 
+                 "Proceso '%s' (PID: %d) ya no existe", process_name, pid);
+        gui_add_log_entry("PROCESS_KILLER", "INFO", not_exist_msg);
+        return FALSE;
+    }
+    
+    return FALSE; // Otros errores
 }
 
 // Callback para cambios en los umbrales
