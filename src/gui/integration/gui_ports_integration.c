@@ -641,24 +641,15 @@ void on_port_scan_completed(const PortInfo *scan_results, int result_count, int 
             gui_update_system_status("Sistema Operativo", TRUE);
         }
     }
-    
-    // Indicar que el escaneo ha terminado
+      // Indicar que el escaneo ha terminado
     gui_set_scanning_status(FALSE);
     
-    // Generar reporte automático si hay resultados significativos
+    // Log de finalización del escaneo
     if (result_count > 0) {
-        char auto_report_filename[256];
-        time_t now = time(NULL);
-        struct tm *tm_info = localtime(&now);
-        strftime(auto_report_filename, sizeof(auto_report_filename), 
-                 "port_scan_%Y%m%d_%H%M%S.txt", tm_info);
-        
-        if (generate_port_scan_report(auto_report_filename, 0) == 0) {
-            char report_msg[512];
-            snprintf(report_msg, sizeof(report_msg), 
-                     "Reporte automático generado: %s", auto_report_filename);
-            gui_add_log_entry("PORT_INTEGRATION", "INFO", report_msg);
-        }
+        char completion_msg[256];
+        snprintf(completion_msg, sizeof(completion_msg), 
+                 "Escaneo de puertos completado: %d puertos procesados", result_count);
+        gui_add_log_entry("PORT_INTEGRATION", "INFO", completion_msg);
     }
 }
 

@@ -239,7 +239,7 @@ static void generate_scan_report(const ScanResult *result) {
 }
 
 /**
- * Guarda el informe de escaneo en un archivo
+ * Legacy. Guarda el informe de escaneo en un archivo
  * 
  * @param result: Resultados del escaneo
  * @param filename: Nombre del archivo donde guardar
@@ -308,15 +308,9 @@ int scan_ports(int start_port, int end_port) {
         printf("Error: Fallo en el escaneo de puertos\n");
         return -1;
     }
-    
+
     // Generar informe en consola
     generate_scan_report(&result);
-    
-    // Guardar informe en archivo
-    char filename[256];
-    snprintf(filename, sizeof(filename), "port_scan_report_%d-%d.txt", 
-             start_port, end_port);
-    save_scan_report(&result, filename);
     
     // Liberar memoria
     free(result.ports);
