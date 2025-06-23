@@ -1,3 +1,4 @@
+#define _GNU_SOURCE  // Para strdup y funciones GNU
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,13 +98,21 @@ void load_config(void) {
             list[strcspn(list, "\n")] = 0;
             
             // Tokenizar la lista de procesos
-            char *token = strtok(list, ",");
-            while (token) {
-                config.white_list = realloc(config.white_list, 
-                                            (config.num_white_processes + 1) * sizeof(char*));
-                if (config.white_list) {
+            char *token = strtok(list, ",");            while (token) {
+                // Usar temp pointer para evitar perder referencia en caso de fallo de realloc
+                char **temp_list = realloc(config.white_list, 
+                                          (config.num_white_processes + 1) * sizeof(char*));
+                if (temp_list) {
+                    config.white_list = temp_list;
                     config.white_list[config.num_white_processes] = strdup(token);
-                    config.num_white_processes++;
+                    if (config.white_list[config.num_white_processes]) {
+                        config.num_white_processes++;
+                    } else {
+                        fprintf(stderr, "[ERROR] No se pudo duplicar cadena para whitelist\n");
+                    }
+                } else {
+                    fprintf(stderr, "[ERROR] No se pudo expandir whitelist\n");
+                    break;
                 }
                 token = strtok(NULL, ",");
             }
@@ -473,6 +482,20 @@ void cleanup_monitoring(void) {
     
     pthread_mutex_lock(&mutex);
     clear_process_list();
+    
+    // Limpiar whitelist
+    if (config.white_list) {
+        for (int i = 0; i < config.num_white_processes; i++) {
+            if (config.white_list[i]) {
+                free(config.white_list[i]);
+                config.white_list[i] = NULL;
+            }
+        }
+        free(config.white_list);
+        config.white_list = NULL;
+        config.num_white_processes = 0;
+    }
+    
     event_callbacks = NULL;
     pthread_mutex_unlock(&mutex);
     
@@ -746,14 +769,16 @@ static int find_process(pid_t pid) {
 }
 
 static void add_process(ProcessInfo info) {
-    procesos_activos = realloc(procesos_activos, 
-                              (num_procesos_activos + 1) * sizeof(ActiveProcess));
+    // Usar temp pointer para evitar perder referencia en caso de fallo de realloc
+    ActiveProcess *temp_array = realloc(procesos_activos, 
+                                       (num_procesos_activos + 1) * sizeof(ActiveProcess));
     
-    if (procesos_activos == NULL) {
-        fprintf(stderr, "Error: No se pudo asignar memoria para nuevo proceso\n");
+    if (temp_array == NULL) {
+        fprintf(stderr, "[ERROR] No se pudo asignar memoria para nuevo proceso\n");
         return;
     }
     
+    procesos_activos = temp_array;
     procesos_activos[num_procesos_activos].info = info;
     procesos_activos[num_procesos_activos].encontrado = 1;
     num_procesos_activos++;
@@ -776,16 +801,29 @@ static void remove_process(pid_t pid) {
     num_procesos_activos--;
     
     if (num_procesos_activos > 0) {
-        procesos_activos = realloc(procesos_activos, 
-                                  num_procesos_activos * sizeof(ActiveProcess));
+        // Usar temp pointer para evitar perder referencia en caso de fallo de realloc
+        ActiveProcess *temp_array = realloc(procesos_activos, 
+                                           num_procesos_activos * sizeof(ActiveProcess));
+        // Solo actualizar si realloc fue exitoso (temp_array != NULL)
+        // Si falla, mantenemos el array original que sigue siendo válido
+        if (temp_array != NULL) {
+            procesos_activos = temp_array;
+        }
+        // Si temp_array es NULL, simplemente mantenemos el array original
+        // aunque será un poco más grande de lo necesario
     } else {
+        // Si no quedan procesos, liberar completamente
         free(procesos_activos);
         procesos_activos = NULL;
     }
 }
 
 static void update_process(ProcessInfo info, int idx) {
-    if (idx < 0 || idx >= num_procesos_activos) return;
+    if (idx < 0 || idx >= num_procesos_activos || procesos_activos == NULL) {
+        fprintf(stderr, "[ERROR] Índice inválido en update_process: %d (max: %d)\n", 
+                idx, num_procesos_activos - 1);
+        return;
+    }
     
     procesos_activos[idx].info = info;
     procesos_activos[idx].encontrado = 1;
