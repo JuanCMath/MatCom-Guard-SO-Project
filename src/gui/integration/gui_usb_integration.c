@@ -8,6 +8,16 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+// Declaraciones de funciones internas
+static gboolean complete_usb_scan_cleanup(gpointer user_data);
+
+// ============================================================================
+// FUNCIONES ESPECÍFICAS PARA BOTONES DIFERENCIADOS  
+// ============================================================================
+
+int refresh_usb_snapshots(void);
+int deep_scan_usb_devices(void);
+
 // ============================================================================
 // ESTRUCTURAS DE ESTADO DE LA INTEGRACIÓN USB
 // ============================================================================
@@ -466,8 +476,203 @@ int sync_gui_with_usb_devices(void) {
     snprintf(sync_msg, sizeof(sync_msg), 
              "Sincronización completada: %d dispositivos actualizados", devices_synced);
     gui_add_log_entry("USB_INTEGRATION", "INFO", sync_msg);
-    
     return devices_synced;
+}
+
+// ============================================================================
+// FUNCIONES ESPECÍFICAS PARA BOTONES DIFERENCIADOS
+// ============================================================================
+
+int refresh_usb_snapshots(void) {
+    pthread_mutex_lock(&usb_state.state_mutex);
+    if (usb_state.scan_in_progress) {
+        pthread_mutex_unlock(&usb_state.state_mutex);
+        gui_add_log_entry("USB_REFRESH", "WARNING", 
+                         "No se puede actualizar: escaneo en progreso");
+        return -1;
+    }
+    usb_state.scan_in_progress = 1;
+    pthread_mutex_unlock(&usb_state.state_mutex);
+
+    gui_add_log_entry("USB_REFRESH", "INFO", 
+                     "🔄 Iniciando actualización de snapshots USB");
+
+    DeviceList* devices = monitor_connected_devices(2);
+    int devices_updated = 0;
+
+    if (devices && devices->count > 0) {
+        for (int i = 0; i < devices->count; i++) {
+            char log_msg[256];
+            snprintf(log_msg, sizeof(log_msg), 
+                     "Creando nuevo snapshot para: %s", devices->devices[i]);
+            gui_add_log_entry("USB_REFRESH", "INFO", log_msg);
+
+            DeviceSnapshot* new_snapshot = create_device_snapshot(devices->devices[i]);
+            
+            if (new_snapshot && validate_device_snapshot(new_snapshot) == 0) {
+                if (store_usb_snapshot(devices->devices[i], new_snapshot) == 0) {
+                    GUIUSBDevice gui_device;
+                    if (adapt_device_snapshot_to_gui(new_snapshot, NULL, &gui_device) == 0) {
+                        strncpy(gui_device.status, "ACTUALIZADO", sizeof(gui_device.status) - 1);
+                        gui_device.files_changed = 0;
+                        gui_device.is_suspicious = FALSE;
+                        gui_update_usb_device(&gui_device);
+                        devices_updated++;
+                    }
+                    
+                    snprintf(log_msg, sizeof(log_msg), 
+                             "✅ Snapshot actualizado para %s (%d archivos)", 
+                             devices->devices[i], new_snapshot->file_count);
+                    gui_add_log_entry("USB_REFRESH", "INFO", log_msg);
+                } else {
+                    snprintf(log_msg, sizeof(log_msg), 
+                             "❌ Error al almacenar snapshot de %s", devices->devices[i]);
+                    gui_add_log_entry("USB_REFRESH", "ERROR", log_msg);
+                    free_device_snapshot(new_snapshot);
+                }
+            } else {
+                snprintf(log_msg, sizeof(log_msg), 
+                         "❌ Error al crear snapshot de %s", devices->devices[i]);
+                gui_add_log_entry("USB_REFRESH", "ERROR", log_msg);
+                if (new_snapshot) {
+                    free_device_snapshot(new_snapshot);
+                }
+            }
+        }
+        free_device_list(devices);
+    } else {
+        gui_add_log_entry("USB_REFRESH", "INFO", 
+                         "No se encontraron dispositivos USB para actualizar");
+    }
+
+    pthread_mutex_lock(&usb_state.state_mutex);
+    usb_state.scan_in_progress = 0;
+    pthread_mutex_unlock(&usb_state.state_mutex);
+
+    char completion_msg[256];
+    snprintf(completion_msg, sizeof(completion_msg), 
+             "🔄 Actualización completada: %d dispositivos actualizados", devices_updated);
+    gui_add_log_entry("USB_REFRESH", "INFO", completion_msg);
+
+    return devices_updated;
+}
+
+int deep_scan_usb_devices(void) {
+    pthread_mutex_lock(&usb_state.state_mutex);
+    if (usb_state.scan_in_progress) {
+        pthread_mutex_unlock(&usb_state.state_mutex);
+        gui_add_log_entry("USB_DEEP_SCAN", "WARNING", 
+                         "No se puede hacer escaneo profundo: escaneo en progreso");
+        return -1;
+    }
+    usb_state.scan_in_progress = 1;
+    pthread_mutex_unlock(&usb_state.state_mutex);
+
+    gui_add_log_entry("USB_DEEP_SCAN", "INFO", 
+                     "🔍 Iniciando escaneo profundo de dispositivos USB");
+
+    DeviceList* devices = monitor_connected_devices(2);
+    int devices_analyzed = 0;
+
+    if (devices && devices->count > 0) {
+        for (int i = 0; i < devices->count; i++) {
+            char log_msg[256];
+            snprintf(log_msg, sizeof(log_msg), 
+                     "Analizando dispositivo: %s", devices->devices[i]);
+            gui_add_log_entry("USB_DEEP_SCAN", "INFO", log_msg);
+
+            DeviceSnapshot* reference_snapshot = get_cached_usb_snapshot(devices->devices[i]);
+            
+            if (!reference_snapshot) {
+                snprintf(log_msg, sizeof(log_msg), 
+                         "⚠️ No hay snapshot de referencia para %s. Creando inicial...", 
+                         devices->devices[i]);
+                gui_add_log_entry("USB_DEEP_SCAN", "WARNING", log_msg);
+                
+                DeviceSnapshot* initial_snapshot = create_device_snapshot(devices->devices[i]);
+                if (initial_snapshot && validate_device_snapshot(initial_snapshot) == 0) {
+                    store_usb_snapshot(devices->devices[i], initial_snapshot);
+                    
+                    GUIUSBDevice gui_device;
+                    if (adapt_device_snapshot_to_gui(initial_snapshot, NULL, &gui_device) == 0) {
+                        strncpy(gui_device.status, "NUEVO", sizeof(gui_device.status) - 1);
+                        gui_device.files_changed = 0;
+                        gui_device.is_suspicious = FALSE;
+                        gui_update_usb_device(&gui_device);
+                    }
+                    devices_analyzed++;
+                }
+                continue;
+            }
+
+            DeviceSnapshot* current_snapshot = create_device_snapshot(devices->devices[i]);
+            
+            if (current_snapshot && validate_device_snapshot(current_snapshot) == 0) {
+                int files_added, files_modified, files_deleted;                if (detect_usb_changes(reference_snapshot, current_snapshot,
+                                           &files_added, &files_modified, &files_deleted) == 0) {
+                    
+                    gboolean is_suspicious = evaluate_usb_suspicion(files_added, files_modified, 
+                                                                   files_deleted, reference_snapshot->file_count);
+                    
+                    GUIUSBDevice gui_device;
+                    if (adapt_device_snapshot_to_gui(current_snapshot, reference_snapshot, &gui_device) == 0) {
+                        if (files_added + files_modified + files_deleted > 0) {
+                            strncpy(gui_device.status, is_suspicious ? "SOSPECHOSO" : "CAMBIOS", 
+                                   sizeof(gui_device.status) - 1);
+                        } else {
+                            strncpy(gui_device.status, "LIMPIO", sizeof(gui_device.status) - 1);
+                        }
+                        
+                        gui_device.files_changed = files_added + files_modified + files_deleted;
+                        gui_device.is_suspicious = is_suspicious;
+                        gui_update_usb_device(&gui_device);
+                    }
+                    
+                    if (is_suspicious) {
+                        snprintf(log_msg, sizeof(log_msg), 
+                                "🚨 ACTIVIDAD SOSPECHOSA en %s: +%d archivos, ~%d modificados, -%d eliminados", 
+                                devices->devices[i], files_added, files_modified, files_deleted);
+                        gui_add_log_entry("USB_DEEP_SCAN", "ALERT", log_msg);
+                    } else if (files_added + files_modified + files_deleted > 0) {
+                        snprintf(log_msg, sizeof(log_msg), 
+                                "ℹ️ Cambios normales en %s: +%d archivos, ~%d modificados, -%d eliminados", 
+                                devices->devices[i], files_added, files_modified, files_deleted);
+                        gui_add_log_entry("USB_DEEP_SCAN", "INFO", log_msg);
+                    } else {
+                        snprintf(log_msg, sizeof(log_msg), 
+                                "✅ Sin cambios en %s", devices->devices[i]);
+                        gui_add_log_entry("USB_DEEP_SCAN", "INFO", log_msg);
+                    }
+                    
+                    devices_analyzed++;
+                }
+                
+                free_device_snapshot(current_snapshot);
+            } else {
+                snprintf(log_msg, sizeof(log_msg), 
+                         "❌ Error al crear snapshot temporal de %s", devices->devices[i]);
+                gui_add_log_entry("USB_DEEP_SCAN", "ERROR", log_msg);
+                if (current_snapshot) {
+                    free_device_snapshot(current_snapshot);
+                }
+            }
+        }
+        free_device_list(devices);
+    } else {
+        gui_add_log_entry("USB_DEEP_SCAN", "INFO", 
+                         "No se encontraron dispositivos USB para analizar");
+    }
+
+    pthread_mutex_lock(&usb_state.state_mutex);
+    usb_state.scan_in_progress = 0;
+    pthread_mutex_unlock(&usb_state.state_mutex);
+
+    char completion_msg[256];
+    snprintf(completion_msg, sizeof(completion_msg), 
+             "🔍 Escaneo profundo completado: %d dispositivos analizados", devices_analyzed);
+    gui_add_log_entry("USB_DEEP_SCAN", "INFO", completion_msg);
+
+    return devices_analyzed;
 }
 
 int get_usb_statistics_for_gui(int *total_devices, int *suspicious_devices, int *total_files) {
@@ -573,6 +778,10 @@ void gui_compatible_scan_usb(void) {
                  "Escaneo USB completado: %d dispositivos analizados", devices_scanned);
         gui_add_log_entry("USB_INTEGRATION", "INFO", result_msg);
     }
+    
+    // IMPORTANTE: Timeout de seguridad para limpiar estado en caso de errores
+    // Esto asegura que los botones se desbloqueen incluso si hay problemas
+    g_timeout_add_seconds(5, (GSourceFunc)complete_usb_scan_cleanup, NULL);
 }
 
 int is_gui_usb_scan_in_progress(void) {
@@ -581,6 +790,36 @@ int is_gui_usb_scan_in_progress(void) {
     pthread_mutex_unlock(&usb_state.state_mutex);
     
     return in_progress;
+}
+
+// ============================================================================
+// FUNCIONES DE LIMPIEZA DE SEGURIDAD
+// ============================================================================
+
+/**
+ * @brief Función de seguridad para limpiar estado USB si hay problemas
+ * 
+ * Esta función actúa como un timeout de seguridad para asegurar que el estado
+ * scan_in_progress se limpie incluso si hay errores en el escaneo USB.
+ */
+static gboolean complete_usb_scan_cleanup(gpointer user_data) {
+    (void)user_data; // Suprimir warning
+    
+    pthread_mutex_lock(&usb_state.state_mutex);
+    
+    if (usb_state.scan_in_progress) {
+        // Solo limpiar si ha pasado suficiente tiempo
+        usb_state.scan_in_progress = 0;
+        pthread_mutex_unlock(&usb_state.state_mutex);
+        
+        gui_add_log_entry("USB_CLEANUP", "INFO", 
+                         "🧹 Estado USB limpiado por timeout de seguridad");
+        gui_set_scanning_status(FALSE);
+    } else {
+        pthread_mutex_unlock(&usb_state.state_mutex);
+    }
+    
+    return FALSE; // Ejecutar solo una vez
 }
 
 // ============================================================================

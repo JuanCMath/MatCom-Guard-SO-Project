@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <pthread.h>
 
+// Declaraciones de funciones internas
+static gboolean complete_process_scan_simulation(gpointer user_data);
+
 // ============================================================================
 // VARIABLES DE ESTADO DE LA INTEGRACIÓN
 // ============================================================================
@@ -370,11 +373,19 @@ void gui_compatible_scan_processes(void) {
                              "Error al iniciar monitoreo de procesos");
             return;
         }
+        
+        // IMPORTANTE: Simular finalización de "escaneo" después de 3 segundos
+        // Esto permite que los botones se desbloqueen mientras el monitoreo continúa
+        g_timeout_add_seconds(3, (GSourceFunc)complete_process_scan_simulation, NULL);
+        
     } else {
         // Si ya está activo, solo hacer una sincronización para refrescar la vista
         gui_add_log_entry("PROCESS_INTEGRATION", "INFO", 
                          "Actualizando vista de procesos...");
         sync_gui_with_backend_processes();
+        
+        // También simular que el "escaneo" terminó para desbloquear botones
+        g_timeout_add_seconds(1, (GSourceFunc)complete_process_scan_simulation, NULL);
     }
     
     // Actualizar estadísticas en la GUI
@@ -393,4 +404,36 @@ int is_gui_process_scan_in_progress(void) {
     pthread_mutex_unlock(&integration_state.state_mutex);
     
     return requested && is_monitoring_active();
+}
+
+// ============================================================================
+// FUNCIONES DE SIMULACIÓN PARA COMPATIBILIDAD CON GUI
+// ============================================================================
+
+/**
+ * @brief Simula la finalización de un "escaneo" de procesos para la GUI
+ * 
+ * Los procesos funcionan con monitoreo continuo, no escaneos puntuales como 
+ * los puertos. Esta función simula que un escaneo terminó para que los botones
+ * de la GUI se desbloqueen, mientras el monitoreo continúa en segundo plano.
+ */
+static gboolean complete_process_scan_simulation(gpointer user_data) {
+    (void)user_data; // Suprimir warning
+    
+    pthread_mutex_lock(&integration_state.state_mutex);
+    
+    // Limpiar el flag que indica que se solicitó monitoreo
+    // Esto permite que los botones se desbloqueen
+    integration_state.monitoring_requested = 0;
+    
+    pthread_mutex_unlock(&integration_state.state_mutex);
+    
+    // Actualizar estado de la GUI para mostrar que el "escaneo" terminó
+    gui_set_scanning_status(FALSE);
+    
+    gui_add_log_entry("PROCESS_INTEGRATION", "INFO", 
+                     "✅ Escaneo inicial de procesos completado - monitoreo continúa activo");
+    
+    // Retornar FALSE para que se ejecute solo una vez
+    return FALSE;
 }

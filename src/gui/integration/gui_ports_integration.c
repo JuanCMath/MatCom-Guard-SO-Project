@@ -57,6 +57,10 @@ static PortsIntegrationState ports_state = {
 // FUNCIONES INTERNAS DEL HILO DE ESCANEO
 // ============================================================================
 
+// Declaraciones de funciones internas
+static void* port_scanning_thread_function(void* arg);
+static gboolean cleanup_scan_thread_callback(gpointer user_data);
+
 /**
  * Esta función representa el núcleo del sistema de escaneo de puertos.
  * Se ejecuta en un hilo separado para no bloquear la interfaz de usuario,
@@ -231,12 +235,8 @@ static void* port_scanning_thread_function(void* arg) {
              "Escaneo completado: %d puertos abiertos, %d sospechosos de %d totales", 
              open_ports, suspicious_ports, total_ports);
     gui_add_log_entry("PORT_SCANNER", "INFO", log_msg);
-    
-    // LLAMAR AL CALLBACK PARA ACTUALIZAR LA GUI
+      // LLAMAR AL CALLBACK PARA ACTUALIZAR LA GUI
     on_port_scan_completed(scan_results, results_count, 0);  // 0 = no cancelado
-    
-    // Actualizar estado de la GUI
-    gui_set_scanning_status(FALSE);
     
     free(pconfig);
     return NULL;
@@ -558,11 +558,27 @@ void on_port_scan_completed(const PortInfo *scan_results, int result_count, int 
              "🔥🔥🔥 on_port_scan_completed EJECUTADO: %d puertos, cancelado=%d 🔥🔥🔥", 
              result_count, scan_cancelled);
     gui_add_log_entry("PORT_CALLBACK", "ALERT", main_msg);
+      // IMPORTANTE: Limpiar estado PRIMERO para evitar problemas de concurrencia
+    pthread_mutex_lock(&ports_state.state_mutex);
+    ports_state.scan_active = 0;
+    ports_state.scan_cancelled = scan_cancelled;
+    int thread_active = (ports_state.scan_thread != 0);
+    pthread_mutex_unlock(&ports_state.state_mutex);
+    
+    // Log del estado para debugging
+    char state_msg[256];
+    snprintf(state_msg, sizeof(state_msg), 
+             "🔧 Estado limpiado: scan_active=0, cancelled=%d, thread_active=%d", 
+             scan_cancelled, thread_active);
+    gui_add_log_entry("PORT_STATE", "INFO", state_msg);
+    
+    // ACTUALIZAR GUI UNA SOLA VEZ
+    gui_set_scanning_status(FALSE);
+    gui_add_log_entry("PORT_CALLBACK", "INFO", "🔄 Estado de GUI actualizado: escaneo finalizado");
     
     if (scan_cancelled) {
         gui_add_log_entry("PORT_SCANNER", "WARNING", 
                          "Escaneo de puertos cancelado por el usuario");
-        gui_set_scanning_status(FALSE);
         return;
     }
     
@@ -607,8 +623,7 @@ void on_port_scan_completed(const PortInfo *scan_results, int result_count, int 
                 g_main_context_invoke(NULL, (GSourceFunc)gui_update_port_main_thread_wrapper, port_copy);
             } else {
                 gui_add_log_entry("GUI_UPDATE", "ERROR", "Error de memoria al crear copia de puerto");
-            }
-        }
+            }        }
         
         char final_msg[256];
         snprintf(final_msg, sizeof(final_msg), 
@@ -619,9 +634,6 @@ void on_port_scan_completed(const PortInfo *scan_results, int result_count, int 
         gui_add_log_entry("GUI_UPDATE", "WARNING", 
                          "⚠️ No hay puertos para actualizar en la GUI");
     }
-    
-    // Actualizar estado de la GUI
-    gui_set_scanning_status(FALSE);
     
     // Actualizar estadísticas finales en la GUI  
     int total_open, total_suspicious;
@@ -641,16 +653,50 @@ void on_port_scan_completed(const PortInfo *scan_results, int result_count, int 
             gui_update_system_status("Sistema Operativo", TRUE);
         }
     }
-      // Indicar que el escaneo ha terminado
-    gui_set_scanning_status(FALSE);
-    
-    // Log de finalización del escaneo
+      // Log de finalización del escaneo
     if (result_count > 0) {
         char completion_msg[256];
-        snprintf(completion_msg, sizeof(completion_msg), 
+        snprintf(completion_msg, sizeof(completion_msg),
                  "Escaneo de puertos completado: %d puertos procesados", result_count);
         gui_add_log_entry("PORT_INTEGRATION", "INFO", completion_msg);
     }
+    
+    // IMPORTANTE: Limpiar el hilo de escaneo para evitar problemas de estado
+    // Esto se hace en el hilo principal de GTK para evitar problemas
+    g_timeout_add(100, (GSourceFunc)cleanup_scan_thread_callback, NULL);
+      gui_add_log_entry("PORT_CALLBACK", "INFO", "🔄 Callback finalizado - estado limpiado");
+}
+
+/**
+ * @brief Función callback para limpiar el hilo de escaneo desde el hilo principal
+ * 
+ * Esta función se ejecuta en el hilo principal de GTK para hacer pthread_join
+ * del hilo de escaneo y asegurar que se libere completamente.
+ */
+static gboolean cleanup_scan_thread_callback(gpointer user_data) {
+    (void)user_data; // Suprimir warning de parámetro no usado
+    
+    pthread_mutex_lock(&ports_state.state_mutex);
+    
+    // Solo hacer join si hay un hilo activo y el escaneo no está activo
+    if (ports_state.scan_active == 0 && ports_state.scan_thread != 0) {
+        pthread_t thread_to_join = ports_state.scan_thread;
+        ports_state.scan_thread = 0;  // Limpiar antes del join
+        pthread_mutex_unlock(&ports_state.state_mutex);
+        
+        // Hacer join del hilo para limpiarlo completamente
+        int join_result = pthread_join(thread_to_join, NULL);
+        if (join_result == 0) {
+            gui_add_log_entry("PORT_CLEANUP", "INFO", "🧹 Hilo de escaneo limpiado correctamente");
+        } else {
+            gui_add_log_entry("PORT_CLEANUP", "WARNING", "⚠️ Error al limpiar hilo de escaneo");
+        }
+    } else {
+        pthread_mutex_unlock(&ports_state.state_mutex);
+    }
+    
+    // Retornar FALSE para que este callback se ejecute solo una vez
+    return FALSE;
 }
 
 void on_suspicious_port_detected(const PortInfo *port_info, const char *threat_description) {

@@ -111,16 +111,28 @@ static void on_process_selection_changed(GtkTreeSelection *selection, gpointer d
 
 // Callback para re-habilitar botón después del escaneo
 static gboolean re_enable_process_button(gpointer data) {
+    static gboolean cleanup_in_progress = FALSE;
     GtkButton *button = GTK_BUTTON(data);
     
     printf(">>> Timer ejecutándose - verificando estado del escaneo\n");
     
+    // Evitar múltiples ejecuciones simultáneas
+    if (cleanup_in_progress) {
+        printf(">>> Limpieza ya en progreso - esperando\n");
+        return G_SOURCE_CONTINUE;
+    }
+    
     if (!is_gui_process_scan_in_progress()) {
         printf(">>> Escaneo completado - rehabilitando botón\n");
+        cleanup_in_progress = TRUE;
+        
         gtk_widget_set_sensitive(GTK_WIDGET(button), TRUE);
         gtk_button_set_label(button, "🔍 Escanear Procesos");
-        gui_set_scanning_status(FALSE);
+        
+        gui_add_log_entry("GUI_PROCESSES", "INFO", "✅ Botón de procesos re-habilitado");
         printf(">>> Botón rehabilitado exitosamente\n");
+        
+        cleanup_in_progress = FALSE;
         return G_SOURCE_REMOVE; // Detener el timer
     } else {
         printf(">>> Escaneo aún en progreso - continuando timer\n");

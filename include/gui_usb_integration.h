@@ -120,6 +120,46 @@ int analyze_usb_device(const char *device_name);
 int perform_deep_usb_scan(const char *device_name);
 
 // ============================================================================
+// FUNCIONES ESPECÍFICAS PARA BOTONES DIFERENCIADOS
+// ============================================================================
+
+/**
+ * @brief Actualiza snapshots de dispositivos USB (función del botón "Actualizar")
+ * 
+ * Esta función es ejecutada cuando el usuario presiona el botón "Actualizar".
+ * Su objetivo es retomar snapshots frescos de todos los dispositivos conectados
+ * sin hacer comparaciones. Es útil cuando el usuario quiere establecer un nuevo
+ * punto de referencia después de hacer cambios legítimos en los dispositivos.
+ * 
+ * Funcionalidad:
+ * 1. Detecta todos los dispositivos USB conectados
+ * 2. Crea nuevos snapshots sin comparar con versiones anteriores
+ * 3. Almacena estos snapshots como nueva línea base
+ * 4. Actualiza la GUI con el estado "ACTUALIZADO"
+ * 
+ * @return int Número de dispositivos actualizados, -1 si error
+ */
+int refresh_usb_snapshots(void);
+
+/**
+ * @brief Realiza análisis comparativo de dispositivos USB (función del botón "Escaneo Profundo")
+ * 
+ * Esta función es ejecutada cuando el usuario presiona el botón "Escaneo Profundo".
+ * Su objetivo es comparar el estado actual de los dispositivos con los snapshots
+ * almacenados para detectar cambios sospechosos sin alterar dichos snapshots.
+ * 
+ * Funcionalidad:
+ * 1. Crea snapshots temporales de todos los dispositivos conectados
+ * 2. Los compara con los snapshots de referencia almacenados
+ * 3. Evalúa si los cambios son sospechosos
+ * 4. Actualiza la GUI con resultados del análisis
+ * 5. NO almacena los nuevos snapshots (mantiene línea base intacta)
+ * 
+ * @return int Número de dispositivos analizados, -1 si error
+ */
+int deep_scan_usb_devices(void);
+
+// ============================================================================
 // GESTIÓN DE ESTADO Y SINCRONIZACIÓN
 // ============================================================================
 

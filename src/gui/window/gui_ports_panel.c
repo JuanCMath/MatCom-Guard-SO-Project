@@ -176,7 +176,8 @@ static void on_quick_scan_clicked(GtkButton *button, gpointer data) {
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(start_port_spin), 1.0);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(end_port_spin), 1024.0);
     
-    // Iniciar escaneo    on_scan_ports_clicked(scan_ports_button, NULL);
+    // Iniciar escaneo
+    on_scan_ports_clicked(scan_ports_button, NULL);
 }
 
 // Callback para el botón de escaneo completo
@@ -206,14 +207,29 @@ static void on_full_scan_clicked(GtkButton *button, gpointer data) {
 
 // Callback para re-habilitar botones después del escaneo
 static gboolean re_enable_port_buttons(gpointer data) {
+    static gboolean cleanup_in_progress = FALSE;
+    
+    // Evitar múltiples ejecuciones simultáneas
+    if (cleanup_in_progress) {
+        return G_SOURCE_CONTINUE;
+    }
+    
     if (!is_gui_port_scan_in_progress()) {
+        cleanup_in_progress = TRUE;
+        
         gtk_widget_set_sensitive(scan_ports_button, TRUE);
         gtk_widget_set_sensitive(quick_scan_button, TRUE);
         gtk_widget_set_sensitive(full_scan_button, TRUE);
         gtk_button_set_label(GTK_BUTTON(scan_ports_button), "🔍 Escanear Rango");
-        gui_set_scanning_status(FALSE);
+        
+        gui_add_log_entry("GUI_PORTS", "INFO", "✅ Botones de puertos re-habilitados");
+        
+        cleanup_in_progress = FALSE;
+        return G_SOURCE_REMOVE; // Detener el timeout
     }
-    return G_SOURCE_REMOVE;
+    
+    // Continuar verificando cada segundo
+    return G_SOURCE_CONTINUE;
 }
 
 // Callback para el botón de escaneo de puertos

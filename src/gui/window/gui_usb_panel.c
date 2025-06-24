@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 #include "gui.h"
+#include "gui_usb_integration.h"
 #include <gtk/gtk.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +19,7 @@ static GtkWidget *usb_tree_view = NULL;
 static GtkListStore *usb_list_store = NULL;
 static GtkWidget *usb_info_label = NULL;
 static GtkWidget *scan_usb_button = NULL;
+static GtkWidget *refresh_usb_button = NULL; // Nueva variable para el botón actualizar
 static GtkWidget *usb_panel_container = NULL;
 
 // Columnas del TreeView
@@ -89,41 +91,99 @@ static void on_usb_selection_changed(GtkTreeSelection *selection, gpointer data)
     }
 }
 
-// Callback para re-habilitar botón después del escaneo
-static gboolean re_enable_usb_button(gpointer data) {
+// Callback para re-habilitar botón de escaneo profundo después del escaneo
+static gboolean re_enable_scan_button(gpointer data) {
+    static gboolean cleanup_in_progress = FALSE;
     GtkButton *button = GTK_BUTTON(data);
+    
+    // Evitar múltiples ejecuciones simultáneas
+    if (cleanup_in_progress) {
+        return G_SOURCE_CONTINUE;
+    }
+    
     if (!is_gui_usb_scan_in_progress()) {
+        cleanup_in_progress = TRUE;
+        
         gtk_widget_set_sensitive(GTK_WIDGET(button), TRUE);
         gtk_button_set_label(button, "🔍 Escaneo Profundo");
-        gui_set_scanning_status(FALSE);
+        
+        gui_add_log_entry("GUI_USB", "INFO", "✅ Botón Escaneo Profundo re-habilitado");
+        
+        cleanup_in_progress = FALSE;
+        return G_SOURCE_REMOVE; // Detener el timeout
     }
-    return G_SOURCE_REMOVE;
+    
+    // Continuar verificando cada segundo
+    return G_SOURCE_CONTINUE;
+}
+
+// Callback para re-habilitar botón de actualizar después del escaneo
+static gboolean re_enable_refresh_button(gpointer data) {
+    static gboolean cleanup_in_progress = FALSE;
+    GtkButton *button = GTK_BUTTON(data);
+    
+    // Evitar múltiples ejecuciones simultáneas
+    if (cleanup_in_progress) {
+        return G_SOURCE_CONTINUE;
+    }
+    
+    if (!is_gui_usb_scan_in_progress()) {
+        cleanup_in_progress = TRUE;
+        
+        gtk_widget_set_sensitive(GTK_WIDGET(button), TRUE);
+        gtk_button_set_label(button, "🔄 Actualizar");
+        
+        gui_add_log_entry("GUI_USB", "INFO", "✅ Botón Actualizar re-habilitado");
+        
+        cleanup_in_progress = FALSE;
+        return G_SOURCE_REMOVE; // Detener el timeout
+    }
+    
+    // Continuar verificando cada segundo
+    return G_SOURCE_CONTINUE;
 }
 
 // Callback para el botón de escaneo USB
-static void on_scan_usb_clicked(GtkButton *button, gpointer data) {
-    if (!usb_callback) {
-        gui_add_log_entry("USB_SCANNER", "WARNING", "No hay callback de escaneo USB configurado");
-        return;
-    }
-    
+// Callback específico para el botón "Actualizar"
+static void on_refresh_usb_clicked(GtkButton *button, gpointer data) {
     if (is_gui_usb_scan_in_progress()) {
         gui_add_log_entry("USB_SCANNER", "WARNING", "Escaneo USB ya en progreso");
         return;
     }
     
-    gui_add_log_entry("USB_SCANNER", "INFO", "Iniciando escaneo manual de dispositivos USB");
+    gui_add_log_entry("USB_SCANNER", "INFO", "Actualizando snapshots de dispositivos USB");
+    gui_set_scanning_status(TRUE);
+    
+    // Deshabilitar el botón durante la actualización
+    gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
+    gtk_button_set_label(button, "🔄 Actualizando...");
+    
+    // Iniciar actualización de snapshots
+    refresh_usb_snapshots();
+    
+    // Verificar periódicamente si terminó la actualización
+    g_timeout_add_seconds(1, re_enable_refresh_button, button);
+}
+
+// Callback específico para el botón "Escaneo Profundo"
+static void on_scan_usb_clicked(GtkButton *button, gpointer data) {
+    if (is_gui_usb_scan_in_progress()) {
+        gui_add_log_entry("USB_SCANNER", "WARNING", "Escaneo USB ya en progreso");
+        return;
+    }
+    
+    gui_add_log_entry("USB_SCANNER", "INFO", "Iniciando escaneo profundo de dispositivos USB");
     gui_set_scanning_status(TRUE);
     
     // Deshabilitar el botón durante el escaneo
     gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
     gtk_button_set_label(button, "🔄 Escaneando...");
     
-    // Iniciar escaneo en hilo separado
-    gui_compatible_scan_usb();
+    // Iniciar escaneo profundo sin actualizar snapshots
+    deep_scan_usb_devices();
     
     // Verificar periódicamente si terminó el escaneo
-    g_timeout_add_seconds(1, re_enable_usb_button, button);
+    g_timeout_add_seconds(1, re_enable_scan_button, button);
 }
 
 // Crear el panel principal de USB
@@ -146,16 +206,15 @@ GtkWidget* create_usb_panel() {
     // Espaciador
     GtkWidget *spacer = gtk_label_new("");
     gtk_box_pack_start(GTK_BOX(toolbar), spacer, TRUE, TRUE, 0);
-    
-    // Botón de actualizar
-    GtkWidget *refresh_button = gtk_button_new_with_label("🔄 Actualizar");
-    gtk_widget_set_tooltip_text(refresh_button, "Actualizar lista de dispositivos");
-    g_signal_connect(refresh_button, "clicked", G_CALLBACK(on_scan_usb_clicked), NULL);
-    gtk_box_pack_end(GTK_BOX(toolbar), refresh_button, FALSE, FALSE, 0);
+      // Botón de actualizar
+    refresh_usb_button = gtk_button_new_with_label("🔄 Actualizar");
+    gtk_widget_set_tooltip_text(refresh_usb_button, "Actualizar lista de dispositivos y retomar snapshot");
+    g_signal_connect(refresh_usb_button, "clicked", G_CALLBACK(on_refresh_usb_clicked), NULL);
+    gtk_box_pack_end(GTK_BOX(toolbar), refresh_usb_button, FALSE, FALSE, 0);
     
     // Botón de escaneo
     scan_usb_button = gtk_button_new_with_label("🔍 Escaneo Profundo");
-    gtk_widget_set_tooltip_text(scan_usb_button, "Realizar escaneo profundo de archivos");
+    gtk_widget_set_tooltip_text(scan_usb_button, "Realizar escaneo profundo comparando con snapshot anterior");
     g_signal_connect(scan_usb_button, "clicked", G_CALLBACK(on_scan_usb_clicked), NULL);
     gtk_box_pack_end(GTK_BOX(toolbar), scan_usb_button, FALSE, FALSE, 0);
     
