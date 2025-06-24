@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <errno.h>
 
 // Declaraciones de funciones internas
 static gboolean complete_usb_scan_cleanup(gpointer user_data);
@@ -74,7 +76,13 @@ static void* usb_monitoring_thread_function(void* arg) {
         
         // Obtener la lista actual de dispositivos conectados
         // Esta función del backend escanea /media para encontrar dispositivos montados
+        // Usar timeout corto para ser más responsivo a señales de parada
         current_devices = monitor_connected_devices(1); // 1 segundo de timeout
+        
+        // Verificar señal de parada después de operación potencialmente bloqueante
+        if (usb_state.should_stop_monitoring) {
+            break;
+        }
         
         if (current_devices && previous_devices) {
             // Detectar dispositivos recién conectados
@@ -124,6 +132,10 @@ static void* usb_monitoring_thread_function(void* arg) {
         // a la señal de parada
         for (int i = 0; i < usb_state.scan_interval_seconds && !usb_state.should_stop_monitoring; i++) {
             sleep(1);
+            // Verificación adicional cada segundo para mayor responsividad
+            if (usb_state.should_stop_monitoring) {
+                break;
+            }
         }
     }
     
@@ -299,16 +311,54 @@ int stop_usb_monitoring(void) {
     usb_state.should_stop_monitoring = 1;
     pthread_mutex_unlock(&usb_state.state_mutex);
     
-    // Esperar a que el hilo termine
-    int result = pthread_join(usb_state.monitoring_thread, NULL);
+    gui_add_log_entry("USB_INTEGRATION", "INFO", 
+                     "Esperando terminación del hilo USB...");
     
-    if (result == 0) {
+    // Usar un enfoque de timeout manual más portable
+    int timeout_seconds = 3;
+    int attempts = 0;
+    
+    while (attempts < timeout_seconds) {
+        pthread_mutex_lock(&usb_state.state_mutex);
+        int still_active = usb_state.monitoring_active;
+        pthread_mutex_unlock(&usb_state.state_mutex);
+        
+        if (!still_active) {
+            gui_add_log_entry("USB_INTEGRATION", "INFO", 
+                             "Hilo USB terminó naturalmente");
+            break;
+        }
+        
+        sleep(1);
+        attempts++;
+    }
+    
+    // Si el hilo aún está activo después del timeout, forzar terminación
+    pthread_mutex_lock(&usb_state.state_mutex);
+    if (usb_state.monitoring_active) {
+        pthread_mutex_unlock(&usb_state.state_mutex);
+        
+        gui_add_log_entry("USB_INTEGRATION", "WARNING", 
+                         "Timeout al esperar terminación - usando pthread_join");
+        
+        // Intentar join normal como último recurso
+        int result = pthread_join(usb_state.monitoring_thread, NULL);
+        
+        if (result == 0) {
+            gui_add_log_entry("USB_INTEGRATION", "INFO", 
+                             "Monitoreo USB detenido exitosamente");
+        } else {
+            gui_add_log_entry("USB_INTEGRATION", "WARNING", 
+                             "Error en pthread_join - marcando como inactivo");
+            
+            pthread_mutex_lock(&usb_state.state_mutex);
+            usb_state.monitoring_active = 0;
+            pthread_mutex_unlock(&usb_state.state_mutex);
+        }
+    } else {
+        pthread_mutex_unlock(&usb_state.state_mutex);
         gui_add_log_entry("USB_INTEGRATION", "INFO", 
                          "Monitoreo USB detenido exitosamente");
-    } else {
-        gui_add_log_entry("USB_INTEGRATION", "ERROR", 
-                         "Error al detener monitoreo USB");
-        return -1;
     }
     
     return 0;
@@ -322,25 +372,40 @@ int is_usb_monitoring_active(void) {
 }
 
 void cleanup_usb_integration(void) {
+    gui_add_log_entry("USB_INTEGRATION", "INFO", 
+                     "Iniciando limpieza de integración USB...");
+    
     // Detener monitoreo si está activo
     if (is_usb_monitoring_active()) {
+        gui_add_log_entry("USB_INTEGRATION", "INFO", 
+                         "Deteniendo monitoreo USB activo...");
         stop_usb_monitoring();
     }
     
     pthread_mutex_lock(&usb_state.state_mutex);
     
     if (usb_state.initialized) {
+        // Asegurar que cualquier escaneo en progreso se marque como terminado
+        if (usb_state.scan_in_progress) {
+            gui_add_log_entry("USB_INTEGRATION", "WARNING", 
+                             "Escaneo en progreso durante limpieza - forzando terminación");
+            usb_state.scan_in_progress = 0;
+        }
+        
         // Limpiar el cache de snapshots
+        gui_add_log_entry("USB_INTEGRATION", "INFO", 
+                         "Limpiando cache de snapshots USB...");
         cleanup_usb_snapshot_cache();
         
         usb_state.initialized = 0;
-        usb_state.scan_in_progress = 0;
+        usb_state.monitoring_active = 0;
+        usb_state.should_stop_monitoring = 1;
     }
     
     pthread_mutex_unlock(&usb_state.state_mutex);
     
     gui_add_log_entry("USB_INTEGRATION", "INFO", 
-                     "Integración USB finalizada y recursos liberados");
+                     "✅ Integración USB finalizada y recursos liberados");
 }
 
 // ============================================================================
