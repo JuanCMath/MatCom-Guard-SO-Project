@@ -1,3 +1,41 @@
+/**
+ * @file gui_usb_integration.c
+ * @brief Integración entre el sistema de monitoreo de dispositivos USB y la GUI
+ * 
+ * Este módulo implementa la funcionalidad completa de monitoreo de dispositivos USB
+ * para el sistema MatCom Guard. Proporciona detección automática de dispositivos,
+ * análisis de contenido con snapshots, y funcionalidad diferenciada para los
+ * botones "Actualizar" y "Escaneo Profundo".
+ * 
+ * CARACTERÍSTICAS PRINCIPALES:
+ * - Monitoreo automático de conexión/desconexión de dispositivos USB
+ * - Sistema de snapshots para detectar cambios en archivos
+ * - Análisis de actividad sospechosa con heurísticas avanzadas
+ * - Funcionalidad diferenciada: "Actualizar" vs "Escaneo Profundo"
+ * - Thread-safe con timeouts robustos para evitar bloqueos
+ * - Integración completa con la GUI de MatCom Guard
+ * 
+ * ARQUITECTURA:
+ * - Hilo de monitoreo continuo para detectar dispositivos
+ * - Cache de snapshots para comparaciones temporales
+ * - Sistema de estados thread-safe con mutex
+ * - Callbacks para eventos de la GUI
+ * 
+ * FUNCIONALIDAD DIFERENCIADA:
+ * - Botón "Actualizar": Retoma snapshots frescos (única función capaz)
+ * - Botón "Escaneo Profundo": Compara sin alterar snapshots de referencia
+ * 
+ * @author Sistema MatCom Guard
+ * @date Junio 2025
+ * @version 1.0
+ * 
+ * CORRECCIONES IMPLEMENTADAS:
+ * - Eliminación de bloqueos al cerrar aplicación
+ * - Timeout inteligente para terminación de hilos
+ * - Callbacks separados para botones diferenciados
+ * - Limpieza robusta de recursos y estado
+ */
+
 #include "gui_usb_integration.h"
 #include "gui_internal.h"
 #include <stdio.h>
@@ -10,42 +48,109 @@
 #include <time.h>
 #include <errno.h>
 
-// Declaraciones de funciones internas
+// ============================================================================
+// DECLARACIONES DE FUNCIONES INTERNAS
+// ============================================================================
+
+/**
+ * @brief Función de limpieza automática para timeout de seguridad
+ * 
+ * Esta función actúa como un mecanismo de seguridad para asegurar que
+ * el estado scan_in_progress se limpie incluso si hay errores durante
+ * el procesamiento de escaneos USB.
+ * 
+ * @param user_data Datos del usuario (no utilizado)
+ * @return FALSE para ejecutar solo una vez
+ */
 static gboolean complete_usb_scan_cleanup(gpointer user_data);
 
+/**
+ * @brief Función principal del hilo de monitoreo USB
+ * 
+ * Ejecuta en un hilo separado y mantiene vigilancia continua sobre
+ * los dispositivos USB conectados al sistema. Detecta conexiones,
+ * desconexiones y programa escaneos periódicos.
+ * 
+ * @param arg Argumentos del hilo (no utilizado)
+ * @return NULL al terminar
+ */
+static void* usb_monitoring_thread_function(void* arg);
+
 // ============================================================================
-// FUNCIONES ESPECÍFICAS PARA BOTONES DIFERENCIADOS  
+// DECLARACIONES DE FUNCIONES ESPECÍFICAS PARA BOTONES DIFERENCIADOS  
 // ============================================================================
 
+/**
+ * @brief Actualiza snapshots de dispositivos USB (botón "Actualizar")
+ * 
+ * FUNCIÓN EXCLUSIVA del botón "Actualizar". Es la única función capaz
+ * de modificar los snapshots de referencia almacenados en el cache.
+ * 
+ * @return Número de dispositivos actualizados, -1 si error
+ */
 int refresh_usb_snapshots(void);
+
+/**
+ * @brief Realiza análisis comparativo de dispositivos USB (botón "Escaneo Profundo")
+ * 
+ * Función del botón "Escaneo Profundo". Compara el estado actual con
+ * los snapshots de referencia SIN modificarlos, preservando la línea base.
+ * 
+ * @return Número de dispositivos analizados, -1 si error
+ */
 int deep_scan_usb_devices(void);
 
 // ============================================================================
 // ESTRUCTURAS DE ESTADO DE LA INTEGRACIÓN USB
 // ============================================================================
 
-// Esta estructura mantiene el estado completo del sistema de monitoreo USB
-// Es más compleja que la de procesos porque debe manejar dispositivos
-// que pueden conectarse y desconectarse dinámicamente
+/**
+ * @brief Estructura de estado completa del sistema de monitoreo USB
+ * 
+ * Esta estructura mantiene todo el estado necesario para el funcionamiento
+ * del sistema de monitoreo USB. Es más compleja que la de procesos porque
+ * debe manejar dispositivos que pueden conectarse y desconectarse dinámicamente.
+ * 
+ * THREAD SAFETY:
+ * Todos los accesos a esta estructura deben protegerse con state_mutex
+ * para evitar condiciones de carrera entre el hilo principal y el de monitoreo.
+ * 
+ * CICLO DE VIDA:
+ * 1. initialized = 0 -> init_usb_integration() -> initialized = 1
+ * 2. monitoring_active = 0 -> start_usb_monitoring() -> monitoring_active = 1
+ * 3. should_stop_monitoring = 0 -> stop_usb_monitoring() -> should_stop_monitoring = 1
+ * 4. cleanup_usb_integration() -> todos los campos a 0
+ */
 typedef struct {
-    int initialized;                    // ¿Está inicializado el sistema?
-    int monitoring_active;              // ¿Está el monitoreo activo?
-    int scan_in_progress;               // ¿Hay un escaneo manual en progreso?
-    int scan_interval_seconds;          // Intervalo entre escaneos automáticos
-    int deep_scan_enabled;              // ¿Está habilitado el escaneo profundo?
-    pthread_t monitoring_thread;        // Hilo de monitoreo automático
-    pthread_mutex_t state_mutex;        // Protege el acceso concurrente
-    volatile int should_stop_monitoring; // Señal para detener el monitoreo
+    int initialized;                    ///< ¿Está inicializado el sistema? (0/1)
+    int monitoring_active;              ///< ¿Está el monitoreo activo? (0/1)
+    int scan_in_progress;               ///< ¿Hay un escaneo manual en progreso? (0/1)
+    int scan_interval_seconds;          ///< Intervalo entre escaneos automáticos (segundos)
+    int deep_scan_enabled;              ///< ¿Está habilitado el escaneo profundo? (0/1)
+    pthread_t monitoring_thread;        ///< Hilo de monitoreo automático
+    pthread_mutex_t state_mutex;        ///< Mutex para proteger acceso concurrente
+    volatile int should_stop_monitoring; ///< Señal atómica para detener el monitoreo (0/1)
 } USBIntegrationState;
 
+/**
+ * @brief Instancia global del estado de integración USB
+ * 
+ * INICIALIZACIÓN SEGURA:
+ * Todos los campos se inicializan a valores seguros. El mutex se inicializa
+ * estáticamente para evitar problemas de inicialización en entornos multi-hilo.
+ * 
+ * VALORES POR DEFECTO:
+ * - scan_interval_seconds = 30: Balance entre responsividad y rendimiento
+ * - state_mutex = PTHREAD_MUTEX_INITIALIZER: Inicialización estática segura
+ */
 static USBIntegrationState usb_state = {
-    .initialized = 0,
-    .monitoring_active = 0,
-    .scan_in_progress = 0,
-    .scan_interval_seconds = 30,
-    .deep_scan_enabled = 0,
-    .should_stop_monitoring = 0,
-    .state_mutex = PTHREAD_MUTEX_INITIALIZER
+    .initialized = 0,                   // Sistema no inicializado
+    .monitoring_active = 0,             // Monitoreo inactivo
+    .scan_in_progress = 0,              // Sin escaneos en progreso
+    .scan_interval_seconds = 30,        // 30 segundos entre escaneos automáticos
+    .deep_scan_enabled = 0,             // Escaneo profundo deshabilitado por defecto
+    .should_stop_monitoring = 0,        // Continuar monitoreo
+    .state_mutex = PTHREAD_MUTEX_INITIALIZER // Mutex inicializado estáticamente
 };
 
 // ============================================================================
@@ -161,16 +266,54 @@ static void* usb_monitoring_thread_function(void* arg) {
 // GESTIÓN DEL CICLO DE VIDA DEL MONITOR USB
 // ============================================================================
 
+/**
+ * @brief Inicializa la integración entre el monitor USB y la GUI
+ * 
+ * Esta función establece el puente completo entre el sistema de monitoreo de
+ * dispositivos USB del backend y la interfaz gráfica de usuario. A diferencia
+ * del monitor de procesos que trabaja con flujos continuos de datos, el monitor
+ * USB trabaja con "snapshots" discretos que requieren comparación temporal para
+ * detectar actividad maliciosa.
+ * 
+ * PROCESO DE INICIALIZACIÓN:
+ * 1. Verifica que no esté ya inicializado (patrón singleton)
+ * 2. Inicializa el sistema de cache de snapshots
+ * 3. Configura el estado inicial del sistema
+ * 4. Registra la inicialización exitosa
+ * 
+ * COMPONENTES INICIALIZADOS:
+ * - Cache de snapshots para comparaciones temporales
+ * - Estructuras de estado thread-safe
+ * - Sistema de logging integrado
+ * 
+ * THREAD SAFETY:
+ * Utiliza mutex para proteger la inicialización contra condiciones de carrera
+ * en entornos multi-hilo.
+ * 
+ * @return 0 si la inicialización es exitosa, -1 si hay error
+ * 
+ * @note Esta función debe llamarse antes de usar cualquier otra función del módulo
+ * @note Es seguro llamarla múltiples veces (patrón idempotente)
+ * 
+ * EJEMPLO DE USO:
+ * @code
+ * if (init_usb_integration() != 0) {
+ *     fprintf(stderr, "Error al inicializar monitoreo USB\n");
+ *     return -1;
+ * }
+ * @endcode
+ */
 int init_usb_integration(void) {
     pthread_mutex_lock(&usb_state.state_mutex);
     
     if (usb_state.initialized) {
         pthread_mutex_unlock(&usb_state.state_mutex);
-        return 0; // Ya está inicializado
+        return 0; // Ya está inicializado (comportamiento idempotente)
     }
     
     // Inicializar el sistema de cache de snapshots USB
     // Este sistema nos permite mantener snapshots anteriores para comparación
+    // temporal y detectar cambios sospechosos en dispositivos USB
     if (init_usb_snapshot_cache() != 0) {
         pthread_mutex_unlock(&usb_state.state_mutex);
         gui_add_log_entry("USB_INTEGRATION", "ERROR", 
@@ -184,7 +327,7 @@ int init_usb_integration(void) {
     pthread_mutex_unlock(&usb_state.state_mutex);
     
     gui_add_log_entry("USB_INTEGRATION", "INFO", 
-                     "Integración de monitoreo USB inicializada");
+                     "Integración de monitoreo USB inicializada exitosamente");
     
     return 0;
 }
@@ -297,6 +440,47 @@ int perform_manual_usb_scan(void) {
     return devices_scanned;
 }
 
+/**
+ * @brief Detiene el monitoreo automático de dispositivos USB de forma robusta
+ * 
+ * Esta función implementa una estrategia de terminación robusta que resuelve
+ * el problema de bloqueos al cerrar la aplicación. Utiliza timeout inteligente
+ * y múltiples estrategias de terminación para asegurar que la aplicación nunca
+ * se cuelgue esperando por hilos que no responden.
+ * 
+ * ESTRATEGIA DE TERMINACIÓN ROBUSTA:
+ * 1. Señala al hilo que debe terminar (should_stop_monitoring = 1)
+ * 2. Espera terminación natural con timeout de 3 segundos
+ * 3. Si no termina, usa pthread_join como último recurso
+ * 4. En caso de error, marca forzadamente como inactivo
+ * 
+ * MEJORAS IMPLEMENTADAS:
+ * - Timeout de 3 segundos para evitar bloqueos indefinidos
+ * - Verificación periódica del estado del hilo
+ * - Logging detallado para debugging
+ * - Limpieza forzada como mecanismo de seguridad
+ * 
+ * PROBLEMA ORIGINAL:
+ * La función original usaba pthread_join() sin timeout, lo que podía causar
+ * bloqueos indefinidos si el hilo quedaba atrapado en operaciones de E/O.
+ * 
+ * SOLUCIÓN IMPLEMENTADA:
+ * Usa un enfoque de timeout manual más portable que pthread_timedjoin_np,
+ * verificando el estado del hilo cada segundo hasta que termine naturalmente
+ * o se agote el timeout.
+ * 
+ * @return 0 si el monitoreo se detuvo correctamente, -1 si hay error
+ * 
+ * @note Es seguro llamar esta función múltiples veces
+ * @note La función siempre termina en máximo 3-4 segundos
+ * 
+ * EJEMPLO DE USO:
+ * @code
+ * if (stop_usb_monitoring() != 0) {
+ *     printf("Advertencia: problemas al detener monitoreo USB\n");
+ * }
+ * @endcode
+ */
 int stop_usb_monitoring(void) {
     pthread_mutex_lock(&usb_state.state_mutex);
     
@@ -438,19 +622,10 @@ int analyze_usb_device(const char *device_name) {
         free_device_snapshot(new_snapshot);
         return -1;
     }
-    
-    // Debug: Verificar el estado del snapshot recién creado
-    printf("DEBUG: Snapshot creado y validado exitosamente para %s\n", device_name);
-    printf("DEBUG: new_snapshot=%p, device_name=%p\n", new_snapshot, new_snapshot->device_name);
-    if (new_snapshot->device_name) {
-        printf("DEBUG: device_name content: '%s'\n", new_snapshot->device_name);
-    }
-    
-    // Paso 2: Recuperar el snapshot anterior del cache para comparación
+      // Paso 2: Recuperar el snapshot anterior del cache para comparación
     DeviceSnapshot* previous_snapshot = get_cached_usb_snapshot(device_name);
     
     // Paso 3: Convertir los datos del backend al formato que entiende la GUI
-    printf("DEBUG: Llamando a adapt_device_snapshot_to_gui...\n");
     GUIUSBDevice gui_device;
     if (adapt_device_snapshot_to_gui(new_snapshot, previous_snapshot, &gui_device) != 0) {
         gui_add_log_entry("USB_ANALYZER", "ERROR", 
@@ -548,6 +723,53 @@ int sync_gui_with_usb_devices(void) {
 // FUNCIONES ESPECÍFICAS PARA BOTONES DIFERENCIADOS
 // ============================================================================
 
+/**
+ * @brief Actualiza snapshots de dispositivos USB (FUNCIÓN EXCLUSIVA DEL BOTÓN "ACTUALIZAR")
+ * 
+ * Esta función implementa la funcionalidad del botón "Actualizar" y es la ÚNICA
+ * función capaz de modificar los snapshots de referencia almacenados en el cache.
+ * Su propósito es establecer una nueva línea base después de cambios legítimos
+ * en los dispositivos USB.
+ * 
+ * FUNCIONALIDAD EXCLUSIVA:
+ * - Es la única función que puede modificar snapshots de referencia
+ * - Reemplaza snapshots anteriores con nuevos snapshots frescos
+ * - Establece nueva línea base para futuras comparaciones
+ * - Resetea contadores de archivos modificados a 0
+ * 
+ * PROCESO DE ACTUALIZACIÓN:
+ * 1. Verifica que no hay otro escaneo en progreso
+ * 2. Detecta todos los dispositivos USB conectados
+ * 3. Crea nuevos snapshots completos (sin comparar con anteriores)
+ * 4. Almacena los snapshots como nueva línea base
+ * 5. Actualiza la GUI con estado "ACTUALIZADO"
+ * 6. Limpia el estado de escaneo
+ * 
+ * DIFERENCIA CON ESCANEO PROFUNDO:
+ * - Esta función MODIFICA snapshots de referencia
+ * - deep_scan_usb_devices() SOLO LEE snapshots sin modificarlos
+ * 
+ * USO RECOMENDADO:
+ * - Después de hacer cambios legítimos en dispositivos USB
+ * - Cuando se quiere establecer un nuevo punto de referencia
+ * - Para "limpiar" el estado después de actividad conocida
+ * 
+ * THREAD SAFETY:
+ * Protegida con mutex para evitar condiciones de carrera con otros escaneos.
+ * 
+ * @return Número de dispositivos actualizados, -1 si error o escaneo en progreso
+ * 
+ * @note Solo esta función puede actualizar snapshots de referencia
+ * @note Marca dispositivos con estado "ACTUALIZADO" en la GUI
+ * 
+ * EJEMPLO DE USO:
+ * @code
+ * int updated = refresh_usb_snapshots();
+ * if (updated > 0) {
+ *     printf("Snapshots actualizados para %d dispositivos\n", updated);
+ * }
+ * @endcode
+ */
 int refresh_usb_snapshots(void) {
     pthread_mutex_lock(&usb_state.state_mutex);
     if (usb_state.scan_in_progress) {
@@ -622,6 +844,63 @@ int refresh_usb_snapshots(void) {
     return devices_updated;
 }
 
+/**
+ * @brief Realiza análisis comparativo de dispositivos USB (FUNCIÓN DEL BOTÓN "ESCANEO PROFUNDO")
+ * 
+ * Esta función implementa la funcionalidad del botón "Escaneo Profundo" y realiza
+ * análisis de seguridad comparativo SIN modificar los snapshots de referencia.
+ * Su propósito es detectar actividad sospechosa preservando la línea base establecida.
+ * 
+ * FUNCIONALIDAD NO DESTRUCTIVA:
+ * - NUNCA modifica snapshots de referencia
+ * - Crea snapshots temporales solo para comparación
+ * - Preserva la línea base establecida por refresh_usb_snapshots()
+ * - Libera snapshots temporales después del análisis
+ * 
+ * PROCESO DE ANÁLISIS PROFUNDO:
+ * 1. Verifica que no hay otro escaneo en progreso
+ * 2. Para cada dispositivo conectado:
+ *    a. Obtiene snapshot de referencia del cache
+ *    b. Crea snapshot temporal del estado actual
+ *    c. Compara ambos snapshots para detectar cambios
+ *    d. Evalúa si los cambios son sospechosos
+ *    e. Actualiza GUI con resultados
+ *    f. Libera snapshot temporal (NO lo almacena)
+ * 
+ * CRITERIOS DE EVALUACIÓN DE SOSPECHA:
+ * - Eliminación masiva: >10% de archivos eliminados
+ * - Modificación masiva: >20% de archivos modificados
+ * - Actividad muy alta: >30% de cambios totales
+ * - Inyección de archivos: Muchos archivos nuevos en dispositivos pequeños
+ * 
+ * ESTADOS POSIBLES EN GUI:
+ * - "NUEVO": Primera vez que se detecta el dispositivo
+ * - "LIMPIO": Sin cambios detectados
+ * - "CAMBIOS": Cambios detectados pero no sospechosos
+ * - "SOSPECHOSO": Cambios que activan heurísticas de seguridad
+ * 
+ * DIFERENCIA CON ACTUALIZACIÓN:
+ * - Esta función SOLO LEE snapshots de referencia
+ * - refresh_usb_snapshots() MODIFICA snapshots de referencia
+ * 
+ * USO RECOMENDADO:
+ * - Para verificación de seguridad periódica
+ * - Cuando se sospecha actividad maliciosa
+ * - Para análisis forense sin alterar evidencia
+ * 
+ * @return Número de dispositivos analizados, -1 si error o escaneo en progreso
+ * 
+ * @note Esta función preserva los snapshots de referencia intactos
+ * @note Los snapshots temporales se liberan automáticamente
+ * 
+ * EJEMPLO DE USO:
+ * @code
+ * int analyzed = deep_scan_usb_devices();
+ * if (analyzed > 0) {
+ *     printf("Análisis completado para %d dispositivos\n", analyzed);
+ * }
+ * @endcode
+ */
 int deep_scan_usb_devices(void) {
     pthread_mutex_lock(&usb_state.state_mutex);
     if (usb_state.scan_in_progress) {

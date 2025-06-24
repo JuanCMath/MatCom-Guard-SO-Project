@@ -107,7 +107,7 @@ static void* coordinator_thread_function(void* arg) {
         }
         pthread_mutex_unlock(&global_state.state_mutex);
         
-        // Mostrar métricas de rendimiento ocasionalmente para debugging
+        // Mostrar métricas de rendimiento cada 5 minutos aproximadamente
         if (global_state.performance_metrics.coordination_cycles_completed % 60 == 0) {  // Cada 5 minutos aprox
             char perf_msg[256];
             snprintf(perf_msg, sizeof(perf_msg),
@@ -527,7 +527,7 @@ int update_gui_with_global_state(void) {
         }
     }
     
-    // Registrar actualización exitosa ocasionalmente para debugging
+    // Registrar actualización exitosa periódicamente
     static int update_count = 0;
     update_count++;
     if (update_count % 20 == 0) {  // Cada 20 actualizaciones

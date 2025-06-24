@@ -552,20 +552,21 @@ void on_individual_port_scanned(const PortInfo *port_info, float progress_percen
  * @param scan_cancelled Indica si el escaneo fue cancelado (0=completo, 1=cancelado)
  */
 void on_port_scan_completed(const PortInfo *scan_results, int result_count, int scan_cancelled) {
-    // LOG MUY VISIBLE PARA DEBUGGING
+    // Registrar finalización del escaneo
     char main_msg[256];
     snprintf(main_msg, sizeof(main_msg), 
-             "🔥🔥🔥 on_port_scan_completed EJECUTADO: %d puertos, cancelado=%d 🔥🔥🔥", 
-             result_count, scan_cancelled);
-    gui_add_log_entry("PORT_CALLBACK", "ALERT", main_msg);
-      // IMPORTANTE: Limpiar estado PRIMERO para evitar problemas de concurrencia
+             "� Escaneo de puertos completado: %d puertos encontrados%s", 
+             result_count, scan_cancelled ? " (cancelado)" : "");
+    gui_add_log_entry("PORT_SCANNER", "INFO", main_msg);
+    
+    // IMPORTANTE: Limpiar estado PRIMERO para evitar problemas de concurrencia
     pthread_mutex_lock(&ports_state.state_mutex);
     ports_state.scan_active = 0;
     ports_state.scan_cancelled = scan_cancelled;
     int thread_active = (ports_state.scan_thread != 0);
     pthread_mutex_unlock(&ports_state.state_mutex);
     
-    // Log del estado para debugging
+    // Verificar estado del hilo
     char state_msg[256];
     snprintf(state_msg, sizeof(state_msg), 
              "🔧 Estado limpiado: scan_active=0, cancelled=%d, thread_active=%d", 

@@ -76,18 +76,12 @@ int adapt_process_info_to_gui(const ProcessInfo *backend_info, GUIProcess *gui_p
     return 0;
 }
 
-int adapt_device_snapshot_to_gui(const DeviceSnapshot *snapshot, 
-                                 const DeviceSnapshot *previous_snapshot,
+int adapt_device_snapshot_to_gui(const DeviceSnapshot *snapshot,                                 const DeviceSnapshot *previous_snapshot,
                                  GUIUSBDevice *gui_device) {
-    printf("DEBUG: Entrando a adapt_device_snapshot_to_gui\n");
-    printf("DEBUG: snapshot=%p, gui_device=%p\n", (void*)snapshot, (void*)gui_device);
-    
     if (!snapshot || !gui_device) {
         fprintf(stderr, "Error: snapshot o gui_device es NULL\n");
         return -1;
     }
-    
-    printf("DEBUG: snapshot->device_name=%p\n", (void*)snapshot->device_name);
     
     // Inicializar estructura GUI
     memset(gui_device, 0, sizeof(GUIUSBDevice));

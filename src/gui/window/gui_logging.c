@@ -131,11 +131,10 @@ static gboolean add_log_entry_main_thread(gpointer user_data) {
     
     // Auto-scroll al final usando una marca del final del buffer
     gtk_text_buffer_get_end_iter(log_buffer, &end_iter);
-    GtkTextMark *end_mark = gtk_text_buffer_create_mark(log_buffer, NULL, &end_iter, FALSE);
-    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(log_text_view), end_mark);
+    GtkTextMark *end_mark = gtk_text_buffer_create_mark(log_buffer, NULL, &end_iter, FALSE);    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(log_text_view), end_mark);
     gtk_text_buffer_delete_mark(log_buffer, end_mark);
     
-    // Imprimir también en consola para debugging
+    // También imprimir en consola para monitoreo del sistema
     printf("%s", full_message);
     
     // Liberar memoria

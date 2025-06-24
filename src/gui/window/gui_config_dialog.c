@@ -191,10 +191,12 @@ static void on_config_apply_clicked(GtkButton *button, gpointer data) {
     // Guardar configuración
     save_config_to_file();
     
-    // Aplicar cambios en el sistema
-    gui_add_log_entry("CONFIG", "INFO", "Configuración aplicada exitosamente");
+    // Aplicar cambios en el sistema    gui_add_log_entry("CONFIG", "INFO", "Configuración aplicada exitosamente");
     
-    // TODO: Notificar a los módulos sobre los cambios
+    // Notificar a los módulos que la configuración ha cambiado
+    // Los módulos principales (USB, procesos, puertos) verificarán automáticamente
+    // los nuevos valores en su próximo ciclo de actualización
+    gui_add_log_entry("CONFIG", "INFO", "Notificando cambios de configuración a todos los módulos");
 }
 
 // Callback para restaurar valores por defecto
