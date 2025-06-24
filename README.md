@@ -339,7 +339,6 @@ Actividad Sospechosa:
 
 ```c
 // Sistema profesional de reportes
-- Gráficos estadísticos integrados
 - Formato profesional con logos
 - Información detallada de todos los módulos
 - Timestamps y metadatos completos
@@ -413,25 +412,6 @@ void cleanup_process_monitoring(void);    // Limpieza
 ScanResult* scan_ports_range(int start, int end);  // Escaneo por rango
 int is_port_open(const char *host, int port);      // Verificar puerto
 void free_scan_result(ScanResult *result);         // Liberar memoria
-```
-
-### **📁 Estructura de Archivos**
-
-```
-MatCom-Guard-SO-Project/
-├── src/
-│   ├── main.c                          # Punto de entrada
-│   ├── port_scanner.c                  # Escáner de puertos
-│   ├── process_monitor.c               # Monitor de procesos
-│   ├── device_monitor.c                # Monitor de dispositivos
-│   └── gui/
-│       ├── gui_main.c                  # GUI principal
-│       ├── window/                     # Ventanas de la GUI
-│       └── integration/                # Capa de integración
-├── include/                            # Headers
-├── docs/                              # Documentación
-├── tests/                             # Pruebas del sistema
-└── README.md                          # Este archivo
 ```
 
 ### **🧪 Casos de Prueba**
