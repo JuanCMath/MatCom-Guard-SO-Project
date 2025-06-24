@@ -113,7 +113,7 @@ static const char* get_port_icon(int port, const char *state) {
 }
 
 // Callback para cuando se selecciona un puerto
-static void on_port_selection_changed(GtkTreeSelection *selection, gpointer data) {
+static void on_port_selection_changed(GtkTreeSelection *selection, gpointer data __attribute__((unused))) {
     GtkTreeIter iter;
     GtkTreeModel *model;
     
@@ -169,7 +169,7 @@ static void on_port_selection_changed(GtkTreeSelection *selection, gpointer data
 }
 
 // Callback para el botón de escaneo rápido
-static void on_quick_scan_clicked(GtkButton *button, gpointer data) {
+static void on_quick_scan_clicked(GtkButton *button __attribute__((unused)), gpointer data __attribute__((unused))) {
     gui_add_log_entry("PORT_SCANNER", "INFO", "Iniciando escaneo rápido de puertos comunes");
     
     // Establecer rango para puertos comunes
@@ -181,7 +181,7 @@ static void on_quick_scan_clicked(GtkButton *button, gpointer data) {
 }
 
 // Callback para el botón de escaneo completo
-static void on_full_scan_clicked(GtkButton *button, gpointer data) {
+static void on_full_scan_clicked(GtkButton *button __attribute__((unused)), gpointer data __attribute__((unused))) {
     // Crear diálogo de advertencia
     GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(main_window),
                                               GTK_DIALOG_MODAL,
@@ -206,7 +206,7 @@ static void on_full_scan_clicked(GtkButton *button, gpointer data) {
 }
 
 // Callback para re-habilitar botones después del escaneo
-static gboolean re_enable_port_buttons(gpointer data) {
+static gboolean re_enable_port_buttons(gpointer data __attribute__((unused))) {
     static gboolean cleanup_in_progress = FALSE;
     
     // Evitar múltiples ejecuciones simultáneas
@@ -233,7 +233,7 @@ static gboolean re_enable_port_buttons(gpointer data) {
 }
 
 // Callback para el botón de escaneo de puertos
-void on_scan_ports_clicked(GtkButton *button, gpointer data) {
+void on_scan_ports_clicked(GtkButton *button, gpointer data __attribute__((unused))) {
     if (!ports_callback) {
         gui_add_log_entry("PORT_SCANNER", "WARNING", "No hay callback de escaneo de puertos configurado");
         return;

@@ -29,7 +29,7 @@ static int initialize_complete_backend_system(void);
 static void cleanup_complete_backend_system(void);
 static void intelligent_system_sync(void);
 
-static void on_window_destroy(GtkWidget *widget, gpointer data) {
+static void on_window_destroy(GtkWidget *widget __attribute__((unused)), gpointer data __attribute__((unused))) {
     gui_add_log_entry("SISTEMA", "INFO", "Cerrando MatCom Guard - iniciando secuencia de apagado seguro...");
     
     // Realizar limpieza completa del sistema backend
@@ -80,7 +80,7 @@ static GtkWidget* create_main_notebook() {
 }
 
 // Callbacks para los botones del header
-static void on_scan_all_clicked(GtkMenuItem *item, gpointer data) {
+static void on_scan_all_clicked(GtkMenuItem *item __attribute__((unused)), gpointer data __attribute__((unused))) {
     gui_add_log_entry("SCANNER", "INFO", "Iniciando escaneo completo del sistema");
     gui_set_scanning_status(TRUE);
     
@@ -95,7 +95,7 @@ static void on_scan_all_clicked(GtkMenuItem *item, gpointer data) {
     g_timeout_add_seconds(5, (GSourceFunc)gui_set_scanning_status, GINT_TO_POINTER(FALSE));
 }
 
-static void on_scan_usb_menu_clicked(GtkMenuItem *item, gpointer data) {
+static void on_scan_usb_menu_clicked(GtkMenuItem *item __attribute__((unused)), gpointer data __attribute__((unused))) {
     // Cambiar a la pestaña USB
     gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 1);
     
@@ -106,7 +106,7 @@ static void on_scan_usb_menu_clicked(GtkMenuItem *item, gpointer data) {
     }
 }
 
-static void on_scan_processes_menu_clicked(GtkMenuItem *item, gpointer data) {
+static void on_scan_processes_menu_clicked(GtkMenuItem *item __attribute__((unused)), gpointer data __attribute__((unused))) {
     // Cambiar a la pestaña de procesos
     gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 2);
     
@@ -117,7 +117,7 @@ static void on_scan_processes_menu_clicked(GtkMenuItem *item, gpointer data) {
     }
 }
 
-static void on_scan_ports_menu_clicked(GtkMenuItem *item, gpointer data) {
+static void on_scan_ports_menu_clicked(GtkMenuItem *item __attribute__((unused)), gpointer data __attribute__((unused))) {
     // Cambiar a la pestaña de puertos
     gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 3);
     
@@ -128,7 +128,7 @@ static void on_scan_ports_menu_clicked(GtkMenuItem *item, gpointer data) {
     }
 }
 
-static void on_monitor_toggle_clicked(GtkToggleButton *button, gpointer data) {
+static void on_monitor_toggle_clicked(GtkToggleButton *button, gpointer data __attribute__((unused))) {
     gboolean is_active = gtk_toggle_button_get_active(button);
     
     if (is_active) {
@@ -142,12 +142,12 @@ static void on_monitor_toggle_clicked(GtkToggleButton *button, gpointer data) {
     }
 }
 
-static void on_config_clicked(GtkButton *button, gpointer data) {
+static void on_config_clicked(GtkButton *button __attribute__((unused)), gpointer data __attribute__((unused))) {
     gui_add_log_entry("CONFIG", "INFO", "Abriendo ventana de configuración");
     show_config_dialog(GTK_WINDOW(main_window));
 }
 
-static void on_export_clicked(GtkButton *button, gpointer data) {
+static void on_export_clicked(GtkButton *button __attribute__((unused)), gpointer data __attribute__((unused))) {
     // Crear diálogo de guardar archivo
     GtkWidget *dialog = gtk_file_chooser_dialog_new("Exportar Reporte de Seguridad",
                                                     GTK_WINDOW(main_window),

@@ -238,52 +238,7 @@ static void generate_scan_report(const ScanResult *result) {
     }
 }
 
-/**
- * Legacy. Guarda el informe de escaneo en un archivo
- * 
- * @param result: Resultados del escaneo
- * @param filename: Nombre del archivo donde guardar
- * @return int: 0 si es exitoso, -1 si hay error
- */
-static int save_scan_report(const ScanResult *result, const char *filename) {
-    if (!result || !filename) {
-        return -1;
-    }
-    
-    FILE *file = fopen(filename, "w");
-    if (!file) {
-        printf("Error: No se pudo crear el archivo de informe: %s\n", filename);
-        return -1;
-    }
-    
-    // Escribir encabezado
-    fprintf(file, "INFORME DE ESCANEO DE PUERTOS\n");
-    fprintf(file, "Fecha: %s", get_current_timestamp());
-    fprintf(file, "=====================================\n\n");
-    
-    // Escribir resumen
-    fprintf(file, "RESUMEN:\n");
-    fprintf(file, "Total de puertos escaneados: %d\n", result->total_ports);
-    fprintf(file, "Puertos abiertos: %d\n", result->open_ports);
-    fprintf(file, "Puertos sospechosos: %d\n\n", result->suspicious_ports);
-    
-    // Escribir detalles
-    fprintf(file, "DETALLES DE PUERTOS ABIERTOS:\n");
-    for (int i = 0; i < result->total_ports; i++) {
-        const PortInfo *port = &result->ports[i];
-        if (port->is_open) {
-            fprintf(file, "Puerto %d/tcp - %s", port->port, port->service_name);
-            if (port->is_suspicious) {
-                fprintf(file, " [SOSPECHOSO]");
-            }
-            fprintf(file, "\n");
-        }
-    }
-    
-    fclose(file);
-    printf("Informe guardado en: %s\n", filename);
-    return 0;
-}
+
 
 // ============================================================================
 // FUNCIONES PÚBLICAS DE LA INTERFAZ

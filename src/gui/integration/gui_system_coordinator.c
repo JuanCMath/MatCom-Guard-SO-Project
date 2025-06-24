@@ -428,7 +428,6 @@ int detect_cross_module_correlations(void) {
     // detectar patrones de ataque que podrían no ser obvios individualmente
     
     int correlations_detected = 0;
-    time_t current_time = time(NULL);
     
     // Correlación 1: Actividad sospechosa simultánea en procesos y USB
     // Esto podría indicar malware que se propaga a través de dispositivos USB

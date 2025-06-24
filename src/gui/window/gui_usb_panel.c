@@ -58,7 +58,7 @@ static char* format_time_ago(time_t scan_time) {
 }
 
 // Callback para cuando se selecciona un dispositivo
-static void on_usb_selection_changed(GtkTreeSelection *selection, gpointer data) {
+static void on_usb_selection_changed(GtkTreeSelection *selection, gpointer data __attribute__((unused))) {
     GtkTreeIter iter;
     GtkTreeModel *model;
     
@@ -145,7 +145,7 @@ static gboolean re_enable_refresh_button(gpointer data) {
 
 // Callback para el botón de escaneo USB
 // Callback específico para el botón "Actualizar"
-static void on_refresh_usb_clicked(GtkButton *button, gpointer data) {
+static void on_refresh_usb_clicked(GtkButton *button, gpointer data __attribute__((unused))) {
     if (is_gui_usb_scan_in_progress()) {
         gui_add_log_entry("USB_SCANNER", "WARNING", "Escaneo USB ya en progreso");
         return;
@@ -166,7 +166,7 @@ static void on_refresh_usb_clicked(GtkButton *button, gpointer data) {
 }
 
 // Callback específico para el botón "Escaneo Profundo"
-static void on_scan_usb_clicked(GtkButton *button, gpointer data) {
+static void on_scan_usb_clicked(GtkButton *button, gpointer data __attribute__((unused))) {
     if (is_gui_usb_scan_in_progress()) {
         gui_add_log_entry("USB_SCANNER", "WARNING", "Escaneo USB ya en progreso");
         return;
@@ -343,11 +343,11 @@ GtkWidget* create_usb_panel() {
 }
 
 // Función auxiliar para formatear la columna de archivos
-static void format_files_column(GtkTreeViewColumn *column,
+static void format_files_column(GtkTreeViewColumn *column __attribute__((unused)),
                                GtkCellRenderer *renderer,
                                GtkTreeModel *model,
                                GtkTreeIter *iter,
-                               gpointer data) {
+                               gpointer data __attribute__((unused))) {
     gint files_changed, total_files;
     gtk_tree_model_get(model, iter,
                       COL_USB_FILES_CHANGED, &files_changed,

@@ -60,6 +60,7 @@ GtkWidget* create_process_panel(void);
 
 // Funciones del panel de puertos (implementadas en gui_ports_panel.c)
 GtkWidget* create_ports_panel(void);
+void on_scan_ports_clicked(GtkButton *button, gpointer data);
 
 // Funciones del diálogo de configuración (implementadas en gui_config_dialog.c)
 void show_config_dialog(GtkWindow *parent);

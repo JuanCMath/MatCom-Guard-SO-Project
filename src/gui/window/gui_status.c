@@ -63,7 +63,7 @@ GtkWidget* create_status_bar() {
     return status_container;
 }
 
-gboolean update_datetime_status(gpointer user_data) {
+gboolean update_datetime_status(gpointer user_data __attribute__((unused))) {
     // Verificar que el widget existe antes de intentar actualizarlo
     if (!status_datetime) return G_SOURCE_REMOVE;
     

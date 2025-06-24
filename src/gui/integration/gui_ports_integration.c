@@ -363,7 +363,7 @@ int get_port_statistics_for_gui(int *total_open, int *total_suspicious, time_t *
     return 0;
 }
 
-int generate_port_scan_report(const char *report_filename, int include_closed_ports) {
+int generate_port_scan_report(const char *report_filename, int include_closed_ports __attribute__((unused))) {
     if (!report_filename) {
         return -1;
     }
@@ -938,25 +938,6 @@ void cleanup_ports_integration(void) {
     gui_add_log_entry("PORT_INTEGRATION", "INFO", "Limpieza de recursos de puertos completada");
 }
 
-/**
- * Función para validar el estado del sistema antes de operaciones críticas
- */
-static int validate_ports_state(void) {
-    if (!ports_state.initialized) {
-        gui_add_log_entry("PORT_INTEGRATION", "ERROR", 
-                         "Sistema de puertos no inicializado");
-        return -1;
-    }
-    
-    // Verificar que no hay corrupción de memoria básica
-    if (ports_state.last_results_count < 0 || 
-        ports_state.total_ports_to_scan < 0 ||
-        ports_state.ports_completed < 0) {
-        gui_add_log_entry("PORT_INTEGRATION", "ERROR", 
-                         "Estado de puertos corrupto detectado");
-        return -1;
-    }
-      return 0;
-}
+
 
 // ============================================================================
