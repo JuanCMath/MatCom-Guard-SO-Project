@@ -1,6 +1,6 @@
 /**
  * @file monitoring_example.c
- * @brief Ejemplo de uso del sistema de monitoreo con hilos
+ * @brief Legacy: Ejemplo de uso del sistema de monitoreo con hilos en consola
  * 
  * Este archivo muestra cómo usar el sistema de monitoreo de procesos
  * con hilos de manera segura e integrable con una GUI.

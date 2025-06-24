@@ -5,7 +5,7 @@
 #include <time.h>
 #include <sys/types.h>
 
-#define CONFIG_PATH "/etc/matcomguard.conf"
+#define CONFIG_PATH "./matcomguard.conf"
 
 // ===== ESTRUCTURAS PÚBLICAS =====
 
@@ -70,7 +70,11 @@ typedef struct {
 // ===== FUNCIONES API PÚBLICAS =====
 
 // Configuración
-void load_config();
+void load_config(void);
+void save_config(void);
+void update_cpu_threshold(float new_threshold);
+void update_ram_threshold(float new_threshold);
+Config* get_config();
 
 // Control de monitoreo básico
 void monitor_processes();

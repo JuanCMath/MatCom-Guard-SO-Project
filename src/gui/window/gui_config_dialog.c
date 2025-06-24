@@ -164,7 +164,7 @@ static void load_config_from_file() {
 }
 
 // Callback para aplicar cambios
-static void on_config_apply_clicked(GtkButton *button __attribute__((unused)), gpointer data __attribute__((unused))) {
+static void on_config_apply_clicked(GtkButton *button, gpointer data) {
     // Obtener valores de los widgets
     config.cpu_threshold = gtk_spin_button_get_value(GTK_SPIN_BUTTON(cpu_threshold_spin));
     config.mem_threshold = gtk_spin_button_get_value(GTK_SPIN_BUTTON(mem_threshold_spin));
@@ -191,7 +191,8 @@ static void on_config_apply_clicked(GtkButton *button __attribute__((unused)), g
     // Guardar configuración
     save_config_to_file();
     
-    // Aplicar cambios en el sistema    gui_add_log_entry("CONFIG", "INFO", "Configuración aplicada exitosamente");
+    // Aplicar cambios en el sistema
+    gui_add_log_entry("CONFIG", "INFO", "Configuración aplicada exitosamente");
     
     // Notificar a los módulos que la configuración ha cambiado
     // Los módulos principales (USB, procesos, puertos) verificarán automáticamente
@@ -200,7 +201,7 @@ static void on_config_apply_clicked(GtkButton *button __attribute__((unused)), g
 }
 
 // Callback para restaurar valores por defecto
-static void on_config_defaults_clicked(GtkButton *button __attribute__((unused)), gpointer data __attribute__((unused))) {
+static void on_config_defaults_clicked(GtkButton *button, gpointer data) {
     // Crear diálogo de confirmación
     GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(config_dialog),
                                               GTK_DIALOG_MODAL,

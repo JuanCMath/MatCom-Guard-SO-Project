@@ -69,7 +69,7 @@ static const char* get_process_icon(float cpu_usage, float mem_usage, gboolean i
 }
 
 // Callback para cuando se selecciona un proceso
-static void on_process_selection_changed(GtkTreeSelection *selection, gpointer data __attribute__((unused))) {
+static void on_process_selection_changed(GtkTreeSelection *selection, gpointer data) {
     GtkTreeIter iter;
     GtkTreeModel *model;
     
@@ -141,7 +141,7 @@ static gboolean re_enable_process_button(gpointer data) {
 }
 
 // Callback para el botón de escaneo de procesos
-static void on_scan_processes_clicked(GtkButton *button, gpointer data __attribute__((unused))) {
+static void on_scan_processes_clicked(GtkButton *button, gpointer data) {
     printf("=== DIAGNÓSTICO PROCESO ESCANEO ===\n");
     printf("1. Botón presionado\n");
     
@@ -179,7 +179,7 @@ static void on_scan_processes_clicked(GtkButton *button, gpointer data __attribu
 }
 
 // Callback para terminar un proceso
-static void on_kill_process_clicked(GtkButton *button __attribute__((unused)), gpointer data __attribute__((unused))) {
+static void on_kill_process_clicked(GtkButton *button, gpointer data) {
     GtkTreeSelection *selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(process_tree_view));
     GtkTreeIter iter;
     GtkTreeModel *model;
@@ -429,11 +429,11 @@ GtkWidget* create_process_panel() {
 }
 
 // Función auxiliar para formatear la columna de CPU
-static void format_cpu_column(GtkTreeViewColumn *column __attribute__((unused)),
+static void format_cpu_column(GtkTreeViewColumn *column,
                              GtkCellRenderer *renderer,
                              GtkTreeModel *model,
                              GtkTreeIter *iter,
-                             gpointer data __attribute__((unused))) {
+                             gpointer data) {
     gfloat cpu_usage;
     gtk_tree_model_get(model, iter, COL_PROC_CPU_USAGE, &cpu_usage, -1);
     
@@ -443,11 +443,11 @@ static void format_cpu_column(GtkTreeViewColumn *column __attribute__((unused)),
 }
 
 // Función auxiliar para formatear la columna de memoria
-static void format_mem_column(GtkTreeViewColumn *column __attribute__((unused)),
+static void format_mem_column(GtkTreeViewColumn *column,
                              GtkCellRenderer *renderer,
                              GtkTreeModel *model,
                              GtkTreeIter *iter,
-                             gpointer data __attribute__((unused))) {
+                             gpointer data) {
     gfloat mem_usage;
     gtk_tree_model_get(model, iter, COL_PROC_MEM_USAGE, &mem_usage, -1);
     

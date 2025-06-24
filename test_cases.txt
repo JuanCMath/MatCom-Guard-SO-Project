@@ -1,0 +1,57 @@
+-- Monitoreo de dispositivos:
+
+1- Inserción USB
+Acción: Montar un USB con archivos conocidos.
+Resultado Esperado: El sistema registra el dispositivo y establece un baseline (hashes de archivos).
+
+2- Archivo modificado
+Acción: Cambiar el contenido de un .txt en el USB.
+Resultado Esperado: Alerta como "Cambio detectado en /mnt/usb/archivo.txt (hash modificado)".
+
+3- Archivo nuevo
+Acción: Crear un malware.exe en el USB.
+Resultado Esperado: Alerta como "Archivo sospechoso añadido: /mnt/usb/malware.exe".
+
+4- Archivo eliminado
+Acción: Borrar un archivo legítimo.	
+Resultado Esperado: Alerta como "Archivo eliminado:/mnt/usb/documento.pdf".
+
+5- Atributos cambiados
+Acción: chmod 777 a un archivo.	
+Resultado Esperado: Alerta: "Permisos modificados en /mnt/usb/script.sh (ahora 777)".
+
+-- Monitoreo de procesos:
+
+1- Proceso legítimo
+Acción: Ejecutar un proceso con alto uso de CPU que este en la lista blanca.
+Resultado Esperado: No hay alerta si está en lista blanca.
+
+2- Proceso malicioso
+Acción: Ejecutar un script con while true; do :; done.
+Resultado Esperado: Alerta como "Proceso 'bash' usa 99% CPU (umbral: 70%)".
+
+3- Fuga de memoria
+Acción: Ejecutar un programa que consuma RAM (tail /dev/zero).
+Resultado Esperado: Alerta como "Proceso 'tail' usa 90% RAM (umbral: 50%)".
+
+4- Proceso fantasma
+Acción: Matar un proceso y verificar limpieza.	
+Resultado Esperado: El sistema ya no lo monitorea.
+
+-- Monitoreo de puertos:
+
+1- Puerto legítimo
+Acción: Abrir SSH (sudo systemctl start sshd).
+Resultado Esperado: Reportar que se abrio un puerto SSH.
+
+2- Puerto sospechoso
+Acción: Abrir puerto 31337 con nc -l 31337 &.
+Resultado Esperado: Alertar de forma similar a "Puerto 31337/tcp abierto (no estándar).
+
+3- Puerto alto inesperado
+Acción: Abrir puerto 4444 con Python: python3 -m http.server 4444.
+Resultado Esperado: Alertar de forma similar a "Servidor HTTP en puerto no estándar 4444/tcp".
+
+4- Timeout en puertos cerrados
+Acción: Escanear puerto 9999 (cerrado).	
+Resultado Esperado: Reportar algo como "Puerto 9999/tcp cerrado".

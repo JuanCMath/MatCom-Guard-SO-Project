@@ -126,6 +126,72 @@ void load_config(void) {
            config.max_cpu_usage, config.max_ram_usage, config.check_interval, config.alert_duration);
 }
 
+/**
+ * Actualiza dinámicamente el umbral de CPU
+ * 
+ * @param new_threshold: Nuevo umbral de CPU (0-100)
+ */
+void update_cpu_threshold(float new_threshold) {
+    if (new_threshold > 0 && new_threshold <= 100) {
+        config.max_cpu_usage = new_threshold;
+        printf("[INFO] Umbral de CPU actualizado a %.1f%%\n", new_threshold);
+        save_config(); // Persistir cambios
+    }
+}
+
+/**
+ * Actualiza dinámicamente el umbral de memoria
+ * 
+ * @param new_threshold: Nuevo umbral de memoria (0-100)
+ */
+void update_memory_threshold(float new_threshold) {
+    if (new_threshold > 0 && new_threshold <= 100) {
+        config.max_ram_usage = new_threshold;
+        printf("[INFO] Umbral de memoria actualizado a %.1f%%\n", new_threshold);
+        save_config(); // Persistir cambios
+    }
+}
+
+/**
+ * Obtiene acceso de solo lectura a la configuración actual
+ * 
+ * @return Config*: Puntero a la configuración actual
+ */
+Config* get_config() {
+    return &config;
+}
+
+/**
+ * Guarda la configuración actual en el archivo matcomguard.conf
+ * Mantiene persistencia entre sesiones
+ */
+void save_config(void) {
+    FILE *conf = fopen(CONFIG_PATH, "w");
+    if (!conf) {
+        printf("[ERROR] No se pudo abrir %s para escritura\n", CONFIG_PATH);
+        return;
+    }
+
+    // Escribir la configuración actual
+    fprintf(conf, "UMBRAL_CPU=%.1f\n", config.max_cpu_usage);
+    fprintf(conf, "UMBRAL_RAM=%.1f\n", config.max_ram_usage);
+    fprintf(conf, "INTERVALO=%d\n", config.check_interval);
+    fprintf(conf, "DURACION_ALERTA=%d\n", config.alert_duration);
+    
+    // Escribir la whitelist
+    fprintf(conf, "WHITELIST=");
+    for (int i = 0; i < config.num_white_processes; i++) {
+        fprintf(conf, "%s", config.white_list[i]);
+        if (i < config.num_white_processes - 1) {
+            fprintf(conf, ",");
+        }
+    }
+    fprintf(conf, "\n");
+
+    fclose(conf);
+    printf("[INFO] Configuración guardada en %s\n", CONFIG_PATH);
+}
+
 // ===== FUNCIONES DE INFORMACIÓN DE PROCESOS =====
 
 ProcessInfo* get_process_info(pid_t pid) {
