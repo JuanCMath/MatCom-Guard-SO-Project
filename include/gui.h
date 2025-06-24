@@ -21,6 +21,7 @@ typedef struct {
     float cpu_usage;
     float mem_usage;
     gboolean is_suspicious;
+    gboolean is_whitelisted;  // Nuevo campo para whitelist
 } GUIProcess;
 
 typedef struct {

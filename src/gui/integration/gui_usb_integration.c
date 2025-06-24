@@ -104,23 +104,9 @@ int deep_scan_usb_devices(void);
 // ESTRUCTURAS DE ESTADO DE LA INTEGRACIÓN USB
 // ============================================================================
 
-/**
- * @brief Estructura de estado completa del sistema de monitoreo USB
- * 
- * Esta estructura mantiene todo el estado necesario para el funcionamiento
- * del sistema de monitoreo USB. Es más compleja que la de procesos porque
- * debe manejar dispositivos que pueden conectarse y desconectarse dinámicamente.
- * 
- * THREAD SAFETY:
- * Todos los accesos a esta estructura deben protegerse con state_mutex
- * para evitar condiciones de carrera entre el hilo principal y el de monitoreo.
- * 
- * CICLO DE VIDA:
- * 1. initialized = 0 -> init_usb_integration() -> initialized = 1
- * 2. monitoring_active = 0 -> start_usb_monitoring() -> monitoring_active = 1
- * 3. should_stop_monitoring = 0 -> stop_usb_monitoring() -> should_stop_monitoring = 1
- * 4. cleanup_usb_integration() -> todos los campos a 0
- */
+// Esta estructura mantiene el estado completo del sistema de monitoreo USB
+// Es más compleja que la de procesos porque debe manejar dispositivos
+// que pueden conectarse y desconectarse dinámicamente
 typedef struct {
     int initialized;                    ///< ¿Está inicializado el sistema? (0/1)
     int monitoring_active;              ///< ¿Está el monitoreo activo? (0/1)
@@ -308,7 +294,7 @@ int init_usb_integration(void) {
     
     if (usb_state.initialized) {
         pthread_mutex_unlock(&usb_state.state_mutex);
-        return 0; // Ya está inicializado (comportamiento idempotente)
+        return 0; // Ya está inicializado
     }
     
     // Inicializar el sistema de cache de snapshots USB
@@ -459,15 +445,6 @@ int perform_manual_usb_scan(void) {
  * - Verificación periódica del estado del hilo
  * - Logging detallado para debugging
  * - Limpieza forzada como mecanismo de seguridad
- * 
- * PROBLEMA ORIGINAL:
- * La función original usaba pthread_join() sin timeout, lo que podía causar
- * bloqueos indefinidos si el hilo quedaba atrapado en operaciones de E/O.
- * 
- * SOLUCIÓN IMPLEMENTADA:
- * Usa un enfoque de timeout manual más portable que pthread_timedjoin_np,
- * verificando el estado del hilo cada segundo hasta que termine naturalmente
- * o se agote el timeout.
  * 
  * @return 0 si el monitoreo se detuvo correctamente, -1 si hay error
  * 
@@ -726,6 +703,9 @@ int sync_gui_with_usb_devices(void) {
 /**
  * @brief Actualiza snapshots de dispositivos USB (FUNCIÓN EXCLUSIVA DEL BOTÓN "ACTUALIZAR")
  * 
+ * MODIFICACIÓN PRINCIPAL: Esta función fue completamente separada del escaneo profundo
+ * para implementar lógica diferenciada entre los dos botones de la GUI USB.
+ * 
  * Esta función implementa la funcionalidad del botón "Actualizar" y es la ÚNICA
  * función capaz de modificar los snapshots de referencia almacenados en el cache.
  * Su propósito es establecer una nueva línea base después de cambios legítimos
@@ -745,7 +725,7 @@ int sync_gui_with_usb_devices(void) {
  * 5. Actualiza la GUI con estado "ACTUALIZADO"
  * 6. Limpia el estado de escaneo
  * 
- * DIFERENCIA CON ESCANEO PROFUNDO:
+ * DIFERENCIA CRÍTICA CON ESCANEO PROFUNDO:
  * - Esta función MODIFICA snapshots de referencia
  * - deep_scan_usb_devices() SOLO LEE snapshots sin modificarlos
  * 
@@ -879,7 +859,7 @@ int refresh_usb_snapshots(void) {
  * - "CAMBIOS": Cambios detectados pero no sospechosos
  * - "SOSPECHOSO": Cambios que activan heurísticas de seguridad
  * 
- * DIFERENCIA CON ACTUALIZACIÓN:
+ * DIFERENCIA CRÍTICA CON ACTUALIZACIÓN:
  * - Esta función SOLO LEE snapshots de referencia
  * - refresh_usb_snapshots() MODIFICA snapshots de referencia
  * 

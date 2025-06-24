@@ -54,23 +54,30 @@ int adapt_process_info_to_gui(const ProcessInfo *backend_info, GUIProcess *gui_p
     gui_process->pid = backend_info->pid;
     strncpy(gui_process->name, backend_info->name, sizeof(gui_process->name) - 1);
     gui_process->name[sizeof(gui_process->name) - 1] = '\0';
-    
     gui_process->cpu_usage = backend_info->cpu_usage;
     gui_process->mem_usage = backend_info->mem_usage;
     
-    // Lógica de conversión para determinar si es sospechoso
-    // Un proceso es sospechoso si:
-    // 1. Tiene alerta activa en el backend
-    // 2. Excede umbrales y NO está en whitelist
-    // 3. Tiene uso extremadamente alto (>95% CPU o >90% memoria)
+    // MODIFICACIÓN PRINCIPAL: Añadido soporte para campo is_whitelisted
+    // Este campo permite que la GUI muestre correctamente el estado de procesos whitelisted
+    // y evite generar alertas o warnings para estos procesos.
+    gui_process->is_whitelisted = backend_info->is_whitelisted;  
+    
+    // CAMBIO: Lógica mejorada para determinar procesos sospechosos
+    // Ahora considera el estado de whitelist para evitar falsos positivos
     gui_process->is_suspicious = FALSE;
     
-    if (backend_info->alerta_activa) {
-        gui_process->is_suspicious = TRUE;
-    } else if (backend_info->exceeds_thresholds && !backend_info->is_whitelisted) {
-        gui_process->is_suspicious = TRUE;
-    } else if (backend_info->cpu_usage > 95.0 || backend_info->mem_usage > 90.0) {
-        gui_process->is_suspicious = TRUE;
+    // Si el proceso está whitelisted, NUNCA debe marcarse como sospechoso
+    if (backend_info->is_whitelisted) {
+        gui_process->is_suspicious = FALSE;
+    } else {
+        // Solo para procesos NO whitelisted, aplicar detección de comportamiento sospechoso
+        if (backend_info->alerta_activa) {
+            gui_process->is_suspicious = TRUE;
+        } else if (backend_info->exceeds_thresholds) {
+            gui_process->is_suspicious = TRUE;
+        } else if (backend_info->cpu_usage > 95.0 || backend_info->mem_usage > 90.0) {
+            gui_process->is_suspicious = TRUE;
+        }
     }
     
     return 0;

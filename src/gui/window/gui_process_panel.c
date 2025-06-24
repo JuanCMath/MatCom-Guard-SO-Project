@@ -56,8 +56,15 @@ static const char* get_usage_color(float usage, float threshold) {
 }
 
 // Función para determinar el icono según el estado del proceso
-static const char* get_process_icon(float cpu_usage, float mem_usage, gboolean is_suspicious) {
-    if (is_suspicious) {
+// MODIFICACIÓN: Prioridad absoluta para procesos whitelisted
+static const char* get_process_icon(float cpu_usage, float mem_usage, gboolean is_suspicious, gboolean is_whitelisted) {
+    // CAMBIO PRINCIPAL: Prioridad absoluta para whitelist - estos procesos SIEMPRE muestran ✅
+    // Esto evita que procesos como gnome-shell, systemd, etc. muestren iconos de alerta
+    if (is_whitelisted) {
+        return "✅"; // Proceso de confianza - SIEMPRE tiene prioridad
+    } 
+    // Solo si NO está whitelisted, aplicar iconos de alerta/warning
+    else if (is_suspicious) {
         return "🚨"; // Alerta máxima
     } else if (cpu_usage > 80.0 || mem_usage > 80.0) {
         return "⚠️"; // Advertencia
@@ -484,13 +491,19 @@ void gui_update_process(GUIProcess *process) {
     
     // Obtener los umbrales actuales
     gdouble cpu_threshold = gtk_spin_button_get_value(GTK_SPIN_BUTTON(cpu_threshold_spin));
-    gdouble mem_threshold = gtk_spin_button_get_value(GTK_SPIN_BUTTON(mem_threshold_spin));
-    
-    // Determinar estado y colores
+    gdouble mem_threshold = gtk_spin_button_get_value(GTK_SPIN_BUTTON(mem_threshold_spin));    // MODIFICACIÓN CRÍTICA: Lógica de estado para procesos whitelisted
+    // Determinar estado y colores según prioridades
     const char *status = "Normal";
     const char *status_color = "#4CAF50";
     
-    if (process->is_suspicious) {
+    // CAMBIO PRINCIPAL: Prioridad absoluta para whitelist    // Los procesos whitelisted SIEMPRE muestran estado "Whitelisted", sin importar su uso de recursos
+    if (process->is_whitelisted) {
+        status = "Whitelisted";
+        status_color = "#2196F3";  // Azul para procesos de confianza
+    } 
+    // CAMBIO: Solo si NO está whitelisted, verificar si es sospechoso
+    // Esto evita que procesos como gnome-shell generen alertas aunque usen muchos recursos
+    else if (process->is_suspicious) {
         status = "SOSPECHOSO";
         status_color = "#F44336";
     } else if (process->cpu_usage > cpu_threshold && process->mem_usage > mem_threshold) {
@@ -504,7 +517,7 @@ void gui_update_process(GUIProcess *process) {
         status_color = "#FF9800";
     }
     
-    const char *icon = get_process_icon(process->cpu_usage, process->mem_usage, process->is_suspicious);
+    const char *icon = get_process_icon(process->cpu_usage, process->mem_usage, process->is_suspicious, process->is_whitelisted);
     const char *cpu_color = get_usage_color(process->cpu_usage, cpu_threshold);
     const char *mem_color = get_usage_color(process->mem_usage, mem_threshold);
     
@@ -520,9 +533,9 @@ void gui_update_process(GUIProcess *process) {
                       COL_PROC_CPU_COLOR, cpu_color,
                       COL_PROC_MEM_COLOR, mem_color,
                       -1);
-    
-    // Log del evento si es sospechoso
-    if (process->is_suspicious || process->cpu_usage > cpu_threshold || process->mem_usage > mem_threshold) {
+      // Log del evento si es sospechoso Y NO está en whitelist
+    if ((process->is_suspicious || process->cpu_usage > cpu_threshold || process->mem_usage > mem_threshold) 
+        && !process->is_whitelisted) {
         char log_msg[256];
         snprintf(log_msg, sizeof(log_msg), 
                 "Proceso '%s' (PID: %d) - CPU: %.1f%%, RAM: %.1f%% - Estado: %s",
@@ -530,5 +543,13 @@ void gui_update_process(GUIProcess *process) {
         gui_add_log_entry("PROCESS_MONITOR", 
                          process->is_suspicious ? "ALERT" : "WARNING", 
                          log_msg);
+    } else if ((process->is_suspicious || process->cpu_usage > cpu_threshold || process->mem_usage > mem_threshold) 
+               && process->is_whitelisted) {
+        // Log informativo para procesos whitelisted con alto uso
+        char log_msg[256];
+        snprintf(log_msg, sizeof(log_msg), 
+                "✅ Proceso whitelisted '%s' (PID: %d) - CPU: %.1f%%, RAM: %.1f%% - Estado: %s",
+                process->name, process->pid, process->cpu_usage, process->mem_usage, status);
+        gui_add_log_entry("PROCESS_MONITOR", "INFO", log_msg);
     }
 }

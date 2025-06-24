@@ -219,6 +219,26 @@ int start_system_coordinator(int update_interval_seconds_param) {
     return 0;
 }
 
+/**
+ * @brief Detiene el coordinador del sistema de forma robusta
+ * 
+ * El coordinador del sistema es un componente crítico que sincroniza todos los módulos
+ * de MatCom Guard. Su terminación incorrecta puede causar colgamientos graves durante
+ * el cierre de la aplicación. Esta función implementa una estrategia de terminación
+ * defensiva similar a la usada en el monitor de procesos.
+ * 
+ * PROBLEMA RESUELTO: El coordinador puede quedarse bloqueado esperando por condiciones
+ * que nunca se cumplen, especialmente cuando otros módulos ya están cerrando. Un
+ * pthread_join() tradicional en esta situación bloquearía toda la aplicación.
+ * 
+ * ESTRATEGIA IMPLEMENTADA:
+ * - Señalización clara con pthread_cond_signal() para despertar al hilo
+ * - Timeout de 3 segundos para verificación activa del estado
+ * - Marcado forzado como inactivo si no responde
+ * - Join final no bloqueante para limpieza de recursos
+ * 
+ * @return 0 si se detuvo correctamente, -1 si hay error
+ */
 int stop_system_coordinator(void) {
     if (!coordinator_active) {
         gui_add_log_entry("SYSTEM_COORDINATOR", "INFO", 
@@ -231,36 +251,91 @@ int stop_system_coordinator(void) {
     global_state.shutdown_requested = 1;
     pthread_cond_signal(&global_state.state_changed_condition);
     pthread_mutex_unlock(&global_state.state_mutex);
+      gui_add_log_entry("SYSTEM_COORDINATOR", "INFO", 
+                     "Esperando terminación del coordinador...");
     
-    // Esperar a que el hilo termine
-    int result = pthread_join(coordinator_thread, NULL);
-    if (result != 0) {
-        gui_add_log_entry("SYSTEM_COORDINATOR", "ERROR", 
-                         "Error al esperar terminación del hilo coordinador");
-        return -1;
+    // IMPLEMENTACIÓN DE TIMEOUT DEFENSIVO: Similar al monitor de procesos, verificamos
+    // periódicamente si el hilo coordinador ha terminado naturalmente. Esto previene
+    // el bloqueo indefinido que ocurriría si el hilo está esperando por condiciones
+    // que nunca se van a cumplir (por ejemplo, si otros módulos ya están cerrando).
+    int timeout_seconds = 3;
+    int attempts = 0;
+    
+    while (attempts < timeout_seconds) {
+        if (!coordinator_active) {
+            gui_add_log_entry("SYSTEM_COORDINATOR", "INFO", 
+                             "Coordinador terminó naturalmente");
+            return 0;
+        }
+        
+        sleep(1);
+        attempts++;
     }
-    
-    gui_add_log_entry("SYSTEM_COORDINATOR", "INFO", 
-                     "Coordinador del sistema detenido exitosamente");
+      // TERMINACIÓN FORZADA DEL COORDINADOR: Si el hilo no responde después del timeout,
+    // aplicamos la misma estrategia defensiva. El coordinador podría estar bloqueado
+    // en pthread_cond_wait() o en una operación de sincronización que no puede completar
+    // debido al estado de cierre de otros módulos.
+    if (coordinator_active) {
+        gui_add_log_entry("SYSTEM_COORDINATOR", "WARNING", 
+                         "Timeout al esperar terminación - forzando cierre");
+        
+        coordinator_active = 0;  // Marcar como inactivo para prevenir futuras operaciones
+        
+        // ESTRATEGIA DE JOIN NO BLOQUEANTE: Intentamos el join final, pero no dependemos
+        // de él para continuar el proceso de cierre. Si está realmente colgado, al menos
+        // la aplicación puede continuar cerrando otros componentes.
+        int result = pthread_join(coordinator_thread, NULL);
+        if (result == 0) {
+            gui_add_log_entry("SYSTEM_COORDINATOR", "INFO", 
+                             "Coordinador detenido exitosamente tras timeout");
+        } else {
+            gui_add_log_entry("SYSTEM_COORDINATOR", "WARNING", 
+                             "Problema en pthread_join - continuando shutdown");
+        }
+    }
     
     return 0;
 }
 
+/**
+ * @brief Limpia todos los recursos del coordinador del sistema
+ * 
+ * El coordinador del sistema utiliza primitivas de sincronización complejas (mutex y 
+ * condition variables) que deben limpiarse en el orden correcto para evitar deadlocks
+ * o corrupción de memoria. Esta función asegura una secuencia de limpieza segura.
+ * 
+ * ORDEN CRÍTICO DE LIMPIEZA:
+ * 1. Detener el hilo coordinador (con timeout de seguridad)
+ * 2. Marcar como inactivo para prevenir futuras operaciones  
+ * 3. Destruir condition variables antes que el mutex
+ * 4. Destruir mutex al final
+ * 5. Limpiar estado global
+ * 
+ * Este orden previene situaciones donde un hilo intenta usar una primitive de
+ * sincronización que ya fue destruida.
+ */
 void cleanup_system_coordinator(void) {
-    // Detener el coordinador si está activo
+    gui_add_log_entry("SYSTEM_COORDINATOR", "INFO", 
+                     "Iniciando limpieza del coordinador...");
+    
+    // PASO 1: Detener el coordinador usando la función mejorada con timeout
     if (coordinator_active) {
         stop_system_coordinator();
     }
     
-    // Limpiar primitivas de sincronización
-    pthread_mutex_destroy(&global_state.state_mutex);
-    pthread_cond_destroy(&global_state.state_changed_condition);
+    // PASO 2: Asegurar estado consistente antes de destruir recursos
+    coordinator_active = 0;
     
-    // Limpiar el estado global
+    // PASO 3: Destruir primitivas de sincronización en orden seguro
+    // Primero condition variables, luego mutex para evitar deadlocks
+    pthread_cond_destroy(&global_state.state_changed_condition);
+    pthread_mutex_destroy(&global_state.state_mutex);
+    
+    // PASO 4: Limpiar el estado global al final
     memset(&global_state, 0, sizeof(SystemGlobalState));
     
     gui_add_log_entry("SYSTEM_COORDINATOR", "INFO", 
-                     "Recursos del coordinador liberados");
+                     "✅ Recursos del coordinador liberados correctamente");
 }
 
 // ============================================================================

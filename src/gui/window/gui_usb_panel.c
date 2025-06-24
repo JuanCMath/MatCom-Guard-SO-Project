@@ -143,14 +143,17 @@ static gboolean re_enable_refresh_button(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
-// Callback para el botón de escaneo USB
-// Callback específico para el botón "Actualizar"
+// MODIFICACIÓN PRINCIPAL: Callbacks separados para botones diferenciados
+
+// Callback específico para el botón "Actualizar" (FUNCIÓN NUEVA SEPARADA)
+// Este callback llama exclusivamente a refresh_usb_snapshots() que MODIFICA snapshots de referencia
 static void on_refresh_usb_clicked(GtkButton *button, gpointer data __attribute__((unused))) {
     if (is_gui_usb_scan_in_progress()) {
         gui_add_log_entry("USB_SCANNER", "WARNING", "Escaneo USB ya en progreso");
         return;
     }
     
+    // CAMBIO: Log específico que indica que se van a ACTUALIZAR los snapshots
     gui_add_log_entry("USB_SCANNER", "INFO", "Actualizando snapshots de dispositivos USB");
     gui_set_scanning_status(TRUE);
     
@@ -158,20 +161,22 @@ static void on_refresh_usb_clicked(GtkButton *button, gpointer data __attribute_
     gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
     gtk_button_set_label(button, "🔄 Actualizando...");
     
-    // Iniciar actualización de snapshots
+    // FUNCIÓN ESPECÍFICA: refresh_usb_snapshots() - MODIFICA línea base
     refresh_usb_snapshots();
     
     // Verificar periódicamente si terminó la actualización
     g_timeout_add_seconds(1, re_enable_refresh_button, button);
 }
 
-// Callback específico para el botón "Escaneo Profundo"
+// Callback específico para el botón "Escaneo Profundo" (FUNCIÓN NUEVA SEPARADA)
+// Este callback llama exclusivamente a deep_scan_usb_devices() que SOLO LEE snapshots
 static void on_scan_usb_clicked(GtkButton *button, gpointer data __attribute__((unused))) {
     if (is_gui_usb_scan_in_progress()) {
         gui_add_log_entry("USB_SCANNER", "WARNING", "Escaneo USB ya en progreso");
         return;
     }
     
+    // CAMBIO: Log específico que indica ANÁLISIS sin modificación de snapshots  
     gui_add_log_entry("USB_SCANNER", "INFO", "Iniciando escaneo profundo de dispositivos USB");
     gui_set_scanning_status(TRUE);
     
@@ -179,7 +184,7 @@ static void on_scan_usb_clicked(GtkButton *button, gpointer data __attribute__((
     gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
     gtk_button_set_label(button, "🔄 Escaneando...");
     
-    // Iniciar escaneo profundo sin actualizar snapshots
+    // FUNCIÓN ESPECÍFICA: deep_scan_usb_devices() - SOLO LEE snapshots sin modificar
     deep_scan_usb_devices();
     
     // Verificar periódicamente si terminó el escaneo

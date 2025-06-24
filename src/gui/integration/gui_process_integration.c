@@ -139,6 +139,12 @@ int is_process_monitoring_active(void) {
     return is_monitoring_active();
 }
 
+/**
+ * @brief Limpia todos los recursos de la integración de procesos
+ * 
+ * MODIFICACIÓN: Mejorada para realizar limpieza más robusta y evitar
+ * colgamientos durante el cierre de la aplicación.
+ */
 void cleanup_process_integration(void) {
     pthread_mutex_lock(&integration_state.state_mutex);
     
@@ -147,12 +153,17 @@ void cleanup_process_integration(void) {
         return;
     }
     
-    // Detener monitoreo si está activo
+    gui_add_log_entry("PROCESS_INTEGRATION", "INFO", 
+                     "Iniciando limpieza de integración de procesos...");
+    
+    // CAMBIO: La función stop_monitoring() ahora tiene timeout de seguridad
     if (is_monitoring_active()) {
+        gui_add_log_entry("PROCESS_INTEGRATION", "INFO", 
+                         "Deteniendo monitoreo activo...");
         stop_monitoring();
     }
     
-    // Limpiar recursos del backend
+    // CAMBIO: La función cleanup_monitoring() fue mejorada con timeouts
     cleanup_monitoring();
     
     integration_state.initialized = 0;
@@ -161,7 +172,7 @@ void cleanup_process_integration(void) {
     pthread_mutex_unlock(&integration_state.state_mutex);
     
     gui_add_log_entry("PROCESS_INTEGRATION", "INFO", 
-                     "Integración de procesos finalizada y recursos liberados");
+                     "✅ Integración de procesos finalizada y recursos liberados");
 }
 
 // ============================================================================
@@ -212,6 +223,16 @@ void on_gui_process_terminated(pid_t pid, const char *name) {
 void on_gui_high_cpu_alert(ProcessInfo *info) {
     if (!info) return;
     
+    // ⚠️ VERIFICACIÓN ADICIONAL DE SEGURIDAD: Doble chequeo de whitelist
+    if (info->is_whitelisted) {
+        char debug_msg[256];
+        snprintf(debug_msg, sizeof(debug_msg), 
+                 "⚠️ ADVERTENCIA: Intento de alerta para proceso whitelisted '%s' (PID: %d)", 
+                 info->name, info->pid);
+        gui_add_log_entry("PROCESS_MONITOR", "WARNING", debug_msg);
+        return; // NO generar alerta para procesos whitelisted
+    }
+    
     // Convertir para actualización de GUI
     GUIProcess gui_process;
     if (adapt_process_info_to_gui(info, &gui_process) != 0) {
@@ -224,7 +245,7 @@ void on_gui_high_cpu_alert(ProcessInfo *info) {
     // Registrar alerta en el log con nivel ALERT para destacarla
     char log_msg[512];
     snprintf(log_msg, sizeof(log_msg), 
-             "🔥 ALERTA CPU: Proceso '%s' (PID: %d) usando %.1f%% de CPU", 
+             "� ALERTA CPU: Proceso '%s' (PID: %d) usando %.1f%% de CPU", 
              info->name, info->pid, info->cpu_usage);
     gui_add_log_entry("PROCESS_MONITOR", "ALERT", log_msg);
     
@@ -235,6 +256,16 @@ void on_gui_high_cpu_alert(ProcessInfo *info) {
 void on_gui_high_memory_alert(ProcessInfo *info) {
     if (!info) return;
     
+    // ⚠️ VERIFICACIÓN ADICIONAL DE SEGURIDAD: Doble chequeo de whitelist
+    if (info->is_whitelisted) {
+        char debug_msg[256];
+        snprintf(debug_msg, sizeof(debug_msg), 
+                 "⚠️ ADVERTENCIA: Intento de alerta RAM para proceso whitelisted '%s' (PID: %d)", 
+                 info->name, info->pid);
+        gui_add_log_entry("PROCESS_MONITOR", "WARNING", debug_msg);
+        return; // NO generar alerta para procesos whitelisted
+    }
+    
     GUIProcess gui_process;
     if (adapt_process_info_to_gui(info, &gui_process) != 0) {
         return;
@@ -244,7 +275,7 @@ void on_gui_high_memory_alert(ProcessInfo *info) {
     
     char log_msg[512];
     snprintf(log_msg, sizeof(log_msg), 
-             "🧠 ALERTA MEMORIA: Proceso '%s' (PID: %d) usando %.1f%% de RAM", 
+             "🚨 ALERTA MEMORIA: Proceso '%s' (PID: %d) usando %.1f%% de RAM", 
              info->name, info->pid, info->mem_usage);
     gui_add_log_entry("PROCESS_MONITOR", "ALERT", log_msg);
 }
